@@ -3,14 +3,20 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createGitRecoveryService } from "../src/git.js";
+import { createGitRecoveryService as createUninitializedGitService } from "../src/git.js";
+import { initializeAuthority } from "../src/signer.js";
 import { authorizeOperation } from "./authorize.js";
 
 const temporaryRoots: string[] = [];
 
+async function createGitRecoveryService(dataDir: string) {
+  await initializeAuthority(dataDir);
+  return createUninitializedGitService(dataDir);
+}
+
 async function temporaryRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
-  temporaryRoots.push(root);
+  temporaryRoots.push(root, `${root}.keys`);
   return root;
 }
 

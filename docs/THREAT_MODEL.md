@@ -23,6 +23,9 @@ No model actor is trusted to classify its own command as safe. A destructive eff
 6. **The recovery authority protects itself.** A filesystem operation cannot contain the authority data root or the OS account root.
 7. **State changes invalidate proof.** Every adapter re-witnesses protected state before commit and refuses recovery over later live changes.
 8. **Unknown effects fail closed.** Unsupported, mixed, indirect, or opaque destructive effects remain blocked.
+9. **The model process does not hold signing authority.** MCP services load only the public verifier; the private key is loaded only by the separate terminal approval process.
+10. **Sandboxed actors cannot modify authority state.** In Linux sandbox mode, the daemon, ledger, artifacts, and key directory remain outside the agent mount namespace and are reachable only through typed MCP messages.
+11. **The authority cannot be redirected to host paths.** Filesystem, SQLite, and Git prepare requests must use the canonical workspace selected by the sandbox runner.
 
 ## Evidence-backed purge families
 
@@ -58,11 +61,21 @@ Codex exposes `agent_id` on `SubagentStart` and `SubagentStop`, while turn-scope
 
 The safety boundary is therefore actor-independent: every recognized destructive tool call is denied, even when actor attribution is unavailable. A native subagent receives additional recovery context, but that context is defense in depth; the `PreToolUse` denial and MCP approval checks are the enforcement points.
 
+## Process boundary
+
+In enforceable Linux mode, the runner starts the authority daemon before entering `bubblewrap`. The daemon creates one public-key-only MCP server per Unix-socket connection. The in-sandbox plugin launcher is a byte proxy, not an authority process. The model can disconnect the proxy or submit ordinary MCP requests, but it cannot read or mutate the host ledger, recovery artifacts, or private signing directory.
+
+The root filesystem is mounted read-only and the selected repository is rebound writable. This mount policy is inherited by all descendants, including shell-launched agents that do not emit Codex lifecycle hooks. A disposable `CODEX_HOME` prevents normal session writes from failing without granting write access to the real Codex state tree. Sanitized hook metadata is relayed to a dedicated host audit socket; raw commands are never accepted by that endpoint. Network is shared by default because hosted model calls require it; offline operators can request a separate network namespace.
+
 ## Current limitations
 
 - Plugin hooks must be reviewed and trusted. Disabling hooks or using an uninstrumented tool removes interception.
 - `SubagentStart` can inject context but cannot prevent a subagent from starting. Shell-launched agents are blocked when recognized, not comprehensively discovered.
-- Command and patch analysis cannot mediate arbitrary already-running same-user binaries. A production runtime should place the agent in an OS sandbox or copy-on-write filesystem and keep the broker outside it.
+- Direct plugin mode cannot mediate arbitrary already-running same-user binaries. Use the Linux sandbox runner when the harness or its descendants are not trusted with host write access.
+- The enforceable runner currently targets Linux with `bubblewrap`. macOS and Windows still use harness-level interception until native backends are implemented.
+- The selected workspace is writable by design. The sandbox contains its blast radius; hook interception and recovery capabilities govern destructive effects within that workspace.
+- The Unix socket is an availability boundary, not a secret. A sandboxed process can disconnect its own proxy, but direct socket access exposes only the same typed MCP methods and no signing operation.
+- Hook lifecycle records are operational telemetry, not cryptographic actor attestations. A process inside the sandbox can forge or suppress its own audit-socket events; recovery operations, approvals, and capabilities remain authority-owned.
 - POSIX account-home attestation uses `/etc/passwd`, absolute-path `getent`, or BSD `id -P`. Environments where all three are unavailable may report the account root as unresolved and should fail deployment policy until an OS-native identity provider is configured.
 - The filesystem adapter witnesses contents, modes, and symlink targets. It does not yet preserve every ACL, extended attribute, sparse-file layout, hard-link relationship, or open-file semantic.
 - Local filesystem commit uses path revalidation followed by deletion, not descriptor-relative `openat2`/`unlinkat`; hostile concurrent path replacement remains outside this release's guarantee.

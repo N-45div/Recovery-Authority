@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { astVisitor, parse, type QName, type Statement } from "pgsql-ast-parser";
 import type { PostgresRecoveryOperation, PreparePostgresMutation } from "./contracts.js";
-import { CapabilitySigner, sha256 } from "./crypto.js";
+import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
@@ -228,7 +228,7 @@ export class PostgresRecoveryService {
   constructor(
     private readonly dataDir: string,
     private readonly store: OperationStore,
-    private readonly signer: CapabilitySigner,
+    private readonly verifier: CapabilityVerifier,
     tools: PostgresTools = toolsFromEnvironment(),
   ) {
     this.tools = {
@@ -418,7 +418,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
       throw new Error("PostgreSQL connection does not match the restore-tested database");
     }
     if (sha256(sql) !== operation.statementDigest) throw new Error("SQL does not match the restore-tested statement");
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (
       claims.operationId !== operation.id ||
       claims.kind !== operation.kind ||
@@ -487,6 +487,6 @@ THEN 'unsafe' ELSE 'safe' END;`;
 
 export async function createPostgresRecoveryService(dataDir: string, tools?: PostgresTools): Promise<PostgresRecoveryService> {
   const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new PostgresRecoveryService(dataDir, store, signer, tools);
+  const verifier = await PublicCapabilityVerifier.load(dataDir);
+  return new PostgresRecoveryService(dataDir, store, verifier, tools);
 }

@@ -1,93 +1,19 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
-import type { RecoveryOperation } from "./contracts.js";
-import { CapabilitySigner, sha256 } from "./crypto.js";
+import { AuthorizationRegistry, statementDigest, type AuthorizationRecord } from "./authorization.js";
+import type { CapabilityVerifier } from "./crypto.js";
+import { authorityKeyDir, PublicCapabilityVerifier, sha256 } from "./crypto.js";
+import { CapabilitySigner } from "./signer.js";
 import { OperationStore } from "./store.js";
 
-const AuthorizationRecord = z.object({
-  operationId: z.string().uuid(),
-  status: z.enum(["pending", "approved", "expired"]),
-  proofDigest: z.string(),
-  requestedAt: z.string().datetime(),
-  approvedAt: z.string().datetime().nullable(),
-  expiresAt: z.string().datetime(),
-  approvalDigest: z.string().nullable(),
-  capability: z.string().nullable(),
-});
+export type { AuthorizationRecord } from "./authorization.js";
 
-export type AuthorizationRecord = z.infer<typeof AuthorizationRecord>;
-
-function statementDigest(operation: RecoveryOperation): string | null {
-  return "statementDigest" in operation ? operation.statementDigest : null;
-}
-
-export class ApprovalBroker {
-  private readonly approvalsDir: string;
-
+export class ApprovalBroker extends AuthorizationRegistry {
   constructor(
-    private readonly dataDir: string,
-    private readonly store: OperationStore,
+    dataDir: string,
+    store: OperationStore,
+    verifier: CapabilityVerifier,
     private readonly signer: CapabilitySigner,
   ) {
-    this.approvalsDir = join(dataDir, "approvals");
-  }
-
-  private path(operationId: string): string {
-    return join(this.approvalsDir, `${operationId}.json`);
-  }
-
-  private async write(record: AuthorizationRecord): Promise<void> {
-    await mkdir(this.approvalsDir, { recursive: true, mode: 0o700 });
-    const path = this.path(record.operationId);
-    const temporaryPath = `${path}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporaryPath, path);
-  }
-
-  private async read(operationId: string): Promise<AuthorizationRecord> {
-    return AuthorizationRecord.parse(JSON.parse(await readFile(this.path(operationId), "utf8")));
-  }
-
-  async request(operation: RecoveryOperation): Promise<AuthorizationRecord> {
-    const record: AuthorizationRecord = {
-      operationId: operation.id,
-      status: "pending",
-      proofDigest: operation.proofDigest,
-      requestedAt: new Date().toISOString(),
-      approvedAt: null,
-      expiresAt: operation.expiresAt,
-      approvalDigest: null,
-      capability: null,
-    };
-    await this.write(record);
-    return record;
-  }
-
-  async get(operationId: string): Promise<AuthorizationRecord> {
-    const operation = await this.store.get(operationId);
-    const record = await this.read(operationId);
-    if (record.operationId !== operation.id || record.proofDigest !== operation.proofDigest) {
-      throw new Error("Authorization record is not bound to this recovery proof");
-    }
-    if (Date.parse(record.expiresAt) <= Date.now()) {
-      const expired: AuthorizationRecord = { ...record, status: "expired", capability: null };
-      await this.write(expired);
-      return expired;
-    }
-    if (record.status === "approved" && record.capability) {
-      const claims = this.signer.verify(record.capability);
-      if (
-        claims.operationId !== operation.id ||
-        claims.kind !== operation.kind ||
-        claims.proofDigest !== operation.proofDigest ||
-        claims.stateWitness !== operation.stateWitness ||
-        claims.statementDigest !== statementDigest(operation)
-      ) {
-        throw new Error("Approved capability is not bound to this recovery proof");
-      }
-    }
-    return record;
+    super(dataDir, store, verifier);
   }
 
   async approve(operationId: string, confirmation: string): Promise<AuthorizationRecord> {
@@ -126,18 +52,14 @@ export class ApprovalBroker {
     await this.write(approved);
     return approved;
   }
-
-  async assertAuthorized(operationId: string, capability: string): Promise<void> {
-    const record = await this.get(operationId);
-    if (record.status !== "approved" || !record.capability) {
-      throw new Error(`Human authorization is not approved: ${record.status}`);
-    }
-    if (record.capability !== capability) throw new Error("Capability does not match the human-approved authorization");
-  }
 }
 
-export async function createApprovalBroker(dataDir: string): Promise<ApprovalBroker> {
+export async function createApprovalBroker(
+  dataDir: string,
+  keyDir = authorityKeyDir(dataDir),
+): Promise<ApprovalBroker> {
   const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new ApprovalBroker(dataDir, store, signer);
+  const signer = await CapabilitySigner.loadOrCreate(keyDir, dataDir);
+  const verifier = await PublicCapabilityVerifier.load(dataDir);
+  return new ApprovalBroker(dataDir, store, verifier, signer);
 }

@@ -2,14 +2,20 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFilesystemRecoveryService } from "../src/filesystem.js";
+import { createFilesystemRecoveryService as createUninitializedFilesystemService } from "../src/filesystem.js";
+import { initializeAuthority } from "../src/signer.js";
 import { authorizeOperation } from "./authorize.js";
 
 const temporaryRoots: string[] = [];
 
+async function createFilesystemRecoveryService(dataDir: string) {
+  await initializeAuthority(dataDir);
+  return createUninitializedFilesystemService(dataDir);
+}
+
 async function temporaryRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
-  temporaryRoots.push(root);
+  temporaryRoots.push(root, `${root}.keys`);
   return root;
 }
 
@@ -102,7 +108,7 @@ describe("filesystem recovery authority", () => {
     const workspace = await temporaryRoot("recovery-workspace-");
     const dataDir = join(workspace, ".recovery-authority");
     await mkdir(dataDir);
-    await writeFile(join(dataDir, "authority-private.pem"), "authority state");
+    await writeFile(join(dataDir, "operations.json"), "authority state");
     const service = await createFilesystemRecoveryService(dataDir);
 
     expect(service.prepare({

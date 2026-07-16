@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resolve } from "node:path";
+import { realpath } from "node:fs/promises";
 import {
   CommitFilesystemDeleteInput,
   CommitGitResetHardInput,
@@ -14,8 +15,8 @@ import {
   RestorePostgresMutationInput,
   RuntimeInspectionInput,
 } from "./contracts.js";
-import { ApprovalBroker } from "./approval.js";
-import { CapabilitySigner } from "./crypto.js";
+import { AuthorizationRegistry } from "./authorization.js";
+import { authorityKeyDir, PublicCapabilityVerifier } from "./crypto.js";
 import { FilesystemRecoveryService } from "./filesystem.js";
 import { GitRecoveryService } from "./git.js";
 import { PostgresRecoveryService } from "./postgres.js";
@@ -24,30 +25,42 @@ import { OperationStore } from "./store.js";
 import { inspectRuntimeIdentity } from "./identity.js";
 
 const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+const keyDir = authorityKeyDir(dataDir);
+const authorityWorkspaceRoot = process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT
+  ? await realpath(resolve(process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT))
+  : null;
 const pluginRoot = resolve(process.env.PLUGIN_ROOT ?? ".");
 const store = new OperationStore(dataDir);
-const signer = await CapabilitySigner.load(dataDir);
-const approvals = new ApprovalBroker(dataDir, store, signer);
-const filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
-const gitService = new GitRecoveryService(dataDir, store, signer);
-const postgresService = new PostgresRecoveryService(dataDir, store, signer);
-const sqliteService = new SqliteRecoveryService(dataDir, store, signer);
+const verifier = await PublicCapabilityVerifier.load(dataDir);
+const approvals = new AuthorizationRegistry(dataDir, store, verifier);
+const filesystemService = new FilesystemRecoveryService(dataDir, store, verifier);
+const gitService = new GitRecoveryService(dataDir, store, verifier);
+const postgresService = new PostgresRecoveryService(dataDir, store, verifier);
+const sqliteService = new SqliteRecoveryService(dataDir, store, verifier);
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+async function assertAuthorityWorkspace(requestedRoot: string): Promise<void> {
+  if (!authorityWorkspaceRoot) return;
+  const requested = await realpath(resolve(requestedRoot));
+  if (requested !== authorityWorkspaceRoot) {
+    throw new Error(`Recovery scope must equal the sandbox workspace: ${authorityWorkspaceRoot}`);
+  }
 }
 
 function authorizationView<T extends { operationId: string; status: string }>(authorization: T): T & { approvalCommand: string | null } {
   return {
     ...authorization,
     approvalCommand: authorization.status === "pending"
-      ? `bash ${shellQuote(resolve(pluginRoot, "scripts", "approve-operation.sh"))} ${authorization.operationId} --data-dir ${shellQuote(dataDir)}`
+      ? `bash ${shellQuote(resolve(pluginRoot, "scripts", "approve-operation.sh"))} ${authorization.operationId} --data-dir ${shellQuote(dataDir)} --key-dir ${shellQuote(keyDir)}`
       : null,
   };
 }
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.7.0" },
+  { name: "recovery-authority", version: "0.8.0" },
   {
     instructions:
       "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Hook coverage applies only when the bundled hook is trusted.",
@@ -72,6 +85,14 @@ server.registerTool(
         authorityDataOutsideMutableHomeRequired: true,
         destructiveEffectsAreActorIndependent: true,
         nativeSubagentIdentityAvailableOnlyInLifecycleHooks: true,
+        privateSigningKeyLoadedByMcp: false,
+        authorityServerOutsideAgentSandbox: Boolean(process.env.RECOVERY_AUTHORITY_SANDBOX_HOST),
+      },
+      executionBoundary: {
+        sandboxActive: process.env.RECOVERY_AUTHORITY_SANDBOX_HOST === "1",
+        authorityTransport: process.env.RECOVERY_AUTHORITY_SANDBOX_HOST === "1" ? "unix-socket" : "stdio",
+        signingKeyDirectory: keyDir,
+        workspaceRoot: authorityWorkspaceRoot,
       },
     };
     return {
@@ -90,7 +111,9 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const prepared = await filesystemService.prepare(PrepareFilesystemDeleteInput.parse(input));
+    const parsed = PrepareFilesystemDeleteInput.parse(input);
+    await assertAuthorityWorkspace(parsed.workspaceRoot);
+    const prepared = await filesystemService.prepare(parsed);
     const result = {
       operation: prepared.operation,
       authorization: authorizationView(await approvals.request(prepared.operation)),
@@ -148,7 +171,9 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const prepared = await gitService.prepare(PrepareGitResetHardInput.parse(input));
+    const parsed = PrepareGitResetHardInput.parse(input);
+    await assertAuthorityWorkspace(parsed.repositoryRoot);
+    const prepared = await gitService.prepare(parsed);
     const result = {
       operation: prepared.operation,
       authorization: authorizationView(await approvals.request(prepared.operation)),
@@ -206,7 +231,9 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const prepared = await sqliteService.prepare(PrepareSqliteMutationInput.parse(input));
+    const parsed = PrepareSqliteMutationInput.parse(input);
+    await assertAuthorityWorkspace(parsed.workspaceRoot);
+    const prepared = await sqliteService.prepare(parsed);
     const result = {
       operation: prepared.operation,
       authorization: authorizationView(await approvals.request(prepared.operation)),

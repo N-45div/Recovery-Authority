@@ -4,7 +4,11 @@ import { spawnSync } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPostgresRecoveryService } from "../src/postgres.js";
+import {
+  createPostgresRecoveryService as createUninitializedPostgresService,
+  type PostgresTools,
+} from "../src/postgres.js";
+import { initializeAuthority } from "../src/signer.js";
 import { authorizeOperation } from "./authorize.js";
 
 const integration = process.env.RECOVERY_POSTGRES_INTEGRATION === "1" ? describe : describe.skip;
@@ -14,6 +18,11 @@ let temporaryRoot = "";
 let dataDir = "";
 let pgDump = "";
 let psql = "";
+
+async function createPostgresRecoveryService(dataDir: string, tools?: PostgresTools) {
+  await initializeAuthority(dataDir);
+  return createUninitializedPostgresService(dataDir, tools);
+}
 
 function docker(args: string[], input?: string): string {
   const result = spawnSync("docker", args, { encoding: "utf8", input });

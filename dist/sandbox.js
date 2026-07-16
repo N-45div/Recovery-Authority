@@ -64,13 +64,17 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
-// src/approve.ts
-import { createInterface } from "readline/promises";
-import { resolve as resolve3 } from "path";
+// src/sandbox.ts
+import { spawn as spawn2, spawnSync } from "child_process";
+import { cp, lstat, mkdir as mkdir3, mkdtemp, realpath, rm as rm3, symlink } from "fs/promises";
+import { homedir, tmpdir } from "os";
+import { basename, dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve3, sep } from "path";
+import { fileURLToPath } from "url";
 
-// src/authorization.ts
-import { mkdir as mkdir2, readFile as readFile3, rename as rename2, writeFile as writeFile2 } from "fs/promises";
-import { join as join3 } from "path";
+// src/crypto.ts
+import { createHash, verify } from "crypto";
+import { readFile } from "fs/promises";
+import { join, resolve } from "path";
 
 // node_modules/zod/v3/external.js
 var exports_external = {};
@@ -4046,9 +4050,6 @@ var coerce = {
 };
 var NEVER = INVALID;
 // src/crypto.ts
-import { createHash, verify } from "crypto";
-import { readFile } from "fs/promises";
-import { join, resolve } from "path";
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -4092,255 +4093,10 @@ class PublicCapabilityVerifier {
   }
 }
 
-// src/store.ts
-import { mkdir, readFile as readFile2, rename, writeFile } from "fs/promises";
-import { join as join2 } from "path";
-
-// src/contracts.ts
-var PrepareFilesystemDeleteInput = exports_external.object({
-  workspaceRoot: exports_external.string().min(1).describe("Absolute path to the authorized workspace root"),
-  paths: exports_external.array(exports_external.string().min(1)).min(1).max(100).describe("Workspace-relative files or directories to delete"),
-  reason: exports_external.string().min(1).max(500).describe("Why the destructive operation is needed"),
-  ttlSeconds: exports_external.number().int().min(30).max(900).default(300)
-});
-var OperationInput = exports_external.object({
-  operationId: exports_external.string().uuid()
-});
-var RuntimeInspectionInput = exports_external.object({});
-var CommitFilesystemDeleteInput = OperationInput.extend({
-  capability: exports_external.string().min(1)
-});
-var PrepareSqliteMutationInput = exports_external.object({
-  workspaceRoot: exports_external.string().min(1).describe("Absolute path to the authorized workspace root"),
-  databasePath: exports_external.string().min(1).describe("Workspace-relative path to an existing SQLite database"),
-  sql: exports_external.string().min(1).max(1e5).describe("Exact destructive SQL to restore-test and authorize"),
-  reason: exports_external.string().min(1).max(500),
-  ttlSeconds: exports_external.number().int().min(30).max(900).default(300)
-});
-var CommitSqliteMutationInput = OperationInput.extend({
-  capability: exports_external.string().min(1),
-  sql: exports_external.string().min(1).max(1e5)
-});
-var PrepareGitResetHardInput = exports_external.object({
-  repositoryRoot: exports_external.string().min(1).describe("Absolute path to the Git worktree root"),
-  target: exports_external.string().min(1).max(500).default("HEAD").describe("Commit-ish passed to git reset --hard"),
-  reason: exports_external.string().min(1).max(500),
-  ttlSeconds: exports_external.number().int().min(30).max(900).default(300)
-});
-var CommitGitResetHardInput = OperationInput.extend({
-  capability: exports_external.string().min(1)
-});
-var PreparePostgresMutationInput = exports_external.object({
-  connectionUri: exports_external.string().url().describe("PostgreSQL connection URI; credentials are never persisted"),
-  schema: exports_external.string().regex(/^[A-Za-z_][A-Za-z0-9_$]*$/).default("public"),
-  sql: exports_external.string().min(1).max(1e5),
-  reason: exports_external.string().min(1).max(500),
-  ttlSeconds: exports_external.number().int().min(30).max(900).default(300)
-});
-var CommitPostgresMutationInput = OperationInput.extend({
-  capability: exports_external.string().min(1),
-  connectionUri: exports_external.string().url(),
-  sql: exports_external.string().min(1).max(1e5)
-});
-var RestorePostgresMutationInput = OperationInput.extend({
-  connectionUri: exports_external.string().url()
-});
-var FileRecord = exports_external.object({
-  path: exports_external.string(),
-  kind: exports_external.enum(["file", "directory", "symlink"]),
-  mode: exports_external.number().int(),
-  sha256: exports_external.string().nullable(),
-  symlinkTarget: exports_external.string().nullable()
-});
-var RecoveryOperationBase = exports_external.object({
-  id: exports_external.string().uuid(),
-  status: exports_external.enum(["proven", "committed", "recovered", "expired", "failed"]),
-  workspaceRoot: exports_external.string(),
-  paths: exports_external.array(exports_external.string()),
-  reason: exports_external.string(),
-  artifactDir: exports_external.string(),
-  stateWitness: exports_external.string(),
-  proofDigest: exports_external.string(),
-  createdAt: exports_external.string(),
-  expiresAt: exports_external.string(),
-  committedAt: exports_external.string().nullable(),
-  recoveredAt: exports_external.string().nullable(),
-  failure: exports_external.string().nullable()
-});
-var FilesystemRecoveryOperation = RecoveryOperationBase.extend({
-  kind: exports_external.literal("filesystem.delete"),
-  records: exports_external.array(FileRecord)
-});
-var SqliteRecoveryOperation = RecoveryOperationBase.extend({
-  kind: exports_external.literal("sqlite.mutate"),
-  databasePath: exports_external.string(),
-  statementDigest: exports_external.string(),
-  integrityCheck: exports_external.literal("ok"),
-  postCommitWitness: exports_external.string().nullable()
-});
-var GitResetHardRecoveryOperation = RecoveryOperationBase.extend({
-  kind: exports_external.literal("git.reset-hard"),
-  repositoryRoot: exports_external.string(),
-  targetCommit: exports_external.string(),
-  originalHead: exports_external.string(),
-  originalHeadRef: exports_external.string().nullable(),
-  records: exports_external.array(FileRecord),
-  indexDigest: exports_external.string(),
-  indexMode: exports_external.number().int(),
-  postCommitWitness: exports_external.string().nullable()
-});
-var PostgresRecoveryOperation = RecoveryOperationBase.extend({
-  kind: exports_external.literal("postgres.schema-mutate"),
-  schema: exports_external.string(),
-  backupScope: exports_external.literal("database"),
-  connectionFingerprint: exports_external.string(),
-  statementDigest: exports_external.string(),
-  artifactDigest: exports_external.string(),
-  drillPostWitness: exports_external.string(),
-  postCommitWitness: exports_external.string().nullable()
-});
-var RecoveryOperation = exports_external.discriminatedUnion("kind", [
-  FilesystemRecoveryOperation,
-  SqliteRecoveryOperation,
-  GitResetHardRecoveryOperation,
-  PostgresRecoveryOperation
-]);
-
-// src/store.ts
-class OperationStore {
-  dataDir;
-  path;
-  writeQueue = Promise.resolve();
-  constructor(dataDir) {
-    this.dataDir = dataDir;
-    this.path = join2(dataDir, "operations.json");
-  }
-  async read() {
-    await mkdir(this.dataDir, { recursive: true, mode: 448 });
-    try {
-      const raw = JSON.parse(await readFile2(this.path, "utf8"));
-      const operations = Object.fromEntries(Object.entries(raw.operations ?? {}).map(([id, operation]) => [
-        id,
-        RecoveryOperation.parse(operation)
-      ]));
-      return { operations };
-    } catch (error) {
-      if (error.code === "ENOENT")
-        return { operations: {} };
-      throw error;
-    }
-  }
-  async write(document) {
-    const temporaryPath = `${this.path}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}
-`, { mode: 384 });
-    await rename(temporaryPath, this.path);
-  }
-  async put(operation) {
-    const update = this.writeQueue.then(async () => {
-      const document = await this.read();
-      document.operations[operation.id] = RecoveryOperation.parse(operation);
-      await this.write(document);
-    });
-    this.writeQueue = update.catch(() => {
-      return;
-    });
-    await update;
-  }
-  async get(id) {
-    await this.writeQueue;
-    const operation = (await this.read()).operations[id];
-    if (!operation)
-      throw new Error(`Unknown recovery operation: ${id}`);
-    return operation;
-  }
-}
-
-// src/authorization.ts
-var AuthorizationRecordSchema = exports_external.object({
-  operationId: exports_external.string().uuid(),
-  status: exports_external.enum(["pending", "approved", "expired"]),
-  proofDigest: exports_external.string(),
-  requestedAt: exports_external.string().datetime(),
-  approvedAt: exports_external.string().datetime().nullable(),
-  expiresAt: exports_external.string().datetime(),
-  approvalDigest: exports_external.string().nullable(),
-  capability: exports_external.string().nullable()
-});
-function statementDigest(operation) {
-  return "statementDigest" in operation ? operation.statementDigest : null;
-}
-
-class AuthorizationRegistry {
-  store;
-  verifier;
-  approvalsDir;
-  constructor(dataDir, store, verifier) {
-    this.store = store;
-    this.verifier = verifier;
-    this.approvalsDir = join3(dataDir, "approvals");
-  }
-  path(operationId) {
-    return join3(this.approvalsDir, `${operationId}.json`);
-  }
-  async write(record) {
-    await mkdir2(this.approvalsDir, { recursive: true, mode: 448 });
-    const path = this.path(record.operationId);
-    const temporaryPath = `${path}.${process.pid}.tmp`;
-    await writeFile2(temporaryPath, `${JSON.stringify(record, null, 2)}
-`, { mode: 384 });
-    await rename2(temporaryPath, path);
-  }
-  async read(operationId) {
-    return AuthorizationRecordSchema.parse(JSON.parse(await readFile3(this.path(operationId), "utf8")));
-  }
-  async request(operation) {
-    const record = {
-      operationId: operation.id,
-      status: "pending",
-      proofDigest: operation.proofDigest,
-      requestedAt: new Date().toISOString(),
-      approvedAt: null,
-      expiresAt: operation.expiresAt,
-      approvalDigest: null,
-      capability: null
-    };
-    await this.write(record);
-    return record;
-  }
-  async get(operationId) {
-    const operation = await this.store.get(operationId);
-    const record = await this.read(operationId);
-    if (record.operationId !== operation.id || record.proofDigest !== operation.proofDigest) {
-      throw new Error("Authorization record is not bound to this recovery proof");
-    }
-    if (Date.parse(record.expiresAt) <= Date.now()) {
-      const expired = { ...record, status: "expired", capability: null };
-      await this.write(expired);
-      return expired;
-    }
-    if (record.status === "approved" && record.capability) {
-      const claims = this.verifier.verify(record.capability);
-      if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness || claims.statementDigest !== statementDigest(operation)) {
-        throw new Error("Approved capability is not bound to this recovery proof");
-      }
-    }
-    return record;
-  }
-  async assertAuthorized(operationId, capability) {
-    const record = await this.get(operationId);
-    if (record.status !== "approved" || !record.capability) {
-      throw new Error(`Human authorization is not approved: ${record.status}`);
-    }
-    if (record.capability !== capability)
-      throw new Error("Capability does not match the human-approved authorization");
-  }
-}
-
 // src/signer.ts
 import { generateKeyPairSync, sign } from "crypto";
-import { mkdir as mkdir3, readFile as readFile4, rm, writeFile as writeFile3 } from "fs/promises";
-import { join as join4, resolve as resolve2 } from "path";
+import { mkdir, readFile as readFile2, rm, writeFile } from "fs/promises";
+import { join as join2, resolve as resolve2 } from "path";
 function base64url(value) {
   return Buffer.from(value).toString("base64url");
 }
@@ -4354,23 +4110,23 @@ class CapabilitySigner {
     const resolvedKeyDir = resolve2(keyDir);
     const resolvedDataDir = resolve2(publicDataDir);
     await Promise.all([
-      mkdir3(resolvedKeyDir, { recursive: true, mode: 448 }),
-      mkdir3(resolvedDataDir, { recursive: true, mode: 448 })
+      mkdir(resolvedKeyDir, { recursive: true, mode: 448 }),
+      mkdir(resolvedDataDir, { recursive: true, mode: 448 })
     ]);
-    const privatePath = join4(resolvedKeyDir, "authority-private.pem");
-    const keyPublicPath = join4(resolvedKeyDir, "authority-public.pem");
-    const verifierPublicPath = join4(resolvedDataDir, "authority-public.pem");
-    const legacyPrivatePath = join4(resolvedDataDir, "authority-private.pem");
+    const privatePath = join2(resolvedKeyDir, "authority-private.pem");
+    const keyPublicPath = join2(resolvedKeyDir, "authority-public.pem");
+    const verifierPublicPath = join2(resolvedDataDir, "authority-public.pem");
+    const legacyPrivatePath = join2(resolvedDataDir, "authority-private.pem");
     if (resolvedKeyDir !== resolvedDataDir) {
-      const legacyPrivate = await readFile4(legacyPrivatePath, "utf8").catch((error) => {
+      const legacyPrivate = await readFile2(legacyPrivatePath, "utf8").catch((error) => {
         if (error.code === "ENOENT")
           return null;
         throw error;
       });
       if (legacyPrivate) {
-        const legacyPublic = await readFile4(verifierPublicPath, "utf8");
-        const existingPrivate = await readFile4(privatePath, "utf8").catch(() => null);
-        const existingPublic = await readFile4(keyPublicPath, "utf8").catch(() => null);
+        const legacyPublic = await readFile2(verifierPublicPath, "utf8");
+        const existingPrivate = await readFile2(privatePath, "utf8").catch(() => null);
+        const existingPublic = await readFile2(keyPublicPath, "utf8").catch(() => null);
         if (existingPrivate && existingPrivate !== legacyPrivate) {
           throw new Error("Refusing to overwrite a distinct authority signing key during migration");
         }
@@ -4378,9 +4134,9 @@ class CapabilitySigner {
           throw new Error("Refusing to overwrite a distinct authority public key during migration");
         }
         if (!existingPrivate)
-          await writeFile3(privatePath, legacyPrivate, { mode: 384, flag: "wx" });
+          await writeFile(privatePath, legacyPrivate, { mode: 384, flag: "wx" });
         if (!existingPublic)
-          await writeFile3(keyPublicPath, legacyPublic, { mode: 420, flag: "wx" });
+          await writeFile(keyPublicPath, legacyPublic, { mode: 420, flag: "wx" });
         await rm(legacyPrivatePath);
       }
     }
@@ -4388,8 +4144,8 @@ class CapabilitySigner {
     let publicKey;
     try {
       [privateKey, publicKey] = await Promise.all([
-        readFile4(privatePath, "utf8"),
-        readFile4(keyPublicPath, "utf8")
+        readFile2(privatePath, "utf8"),
+        readFile2(keyPublicPath, "utf8")
       ]);
     } catch (error) {
       if (error.code !== "ENOENT")
@@ -4401,18 +4157,18 @@ class CapabilitySigner {
       privateKey = pair.privateKey;
       publicKey = pair.publicKey;
       await Promise.all([
-        writeFile3(privatePath, privateKey, { mode: 384, flag: "wx" }),
-        writeFile3(keyPublicPath, publicKey, { mode: 420, flag: "wx" })
+        writeFile(privatePath, privateKey, { mode: 384, flag: "wx" }),
+        writeFile(keyPublicPath, publicKey, { mode: 420, flag: "wx" })
       ]).catch(async (writeError) => {
         if (writeError.code !== "EEXIST")
           throw writeError;
         [privateKey, publicKey] = await Promise.all([
-          readFile4(privatePath, "utf8"),
-          readFile4(keyPublicPath, "utf8")
+          readFile2(privatePath, "utf8"),
+          readFile2(keyPublicPath, "utf8")
         ]);
       });
     }
-    await writeFile3(verifierPublicPath, publicKey, { mode: 420 });
+    await writeFile(verifierPublicPath, publicKey, { mode: 420 });
     return new CapabilitySigner(privateKey);
   }
   issue(claims) {
@@ -4425,119 +4181,316 @@ async function initializeAuthority(dataDir, keyDir = authorityKeyDir(dataDir)) {
   await CapabilitySigner.loadOrCreate(keyDir, dataDir);
 }
 
-// src/approval.ts
-class ApprovalBroker extends AuthorizationRegistry {
-  signer;
-  constructor(dataDir, store, verifier, signer) {
-    super(dataDir, store, verifier);
-    this.signer = signer;
-  }
-  async approve(operationId, confirmation) {
-    const operation = await this.store.get(operationId);
-    if (operation.status !== "proven")
-      throw new Error(`Operation is not approvable: ${operation.status}`);
-    if (Date.parse(operation.expiresAt) <= Date.now())
-      throw new Error("Recovery proof expired before approval");
-    const record = await this.get(operationId);
-    if (record.status === "approved")
-      return record;
-    const expected = operation.proofDigest.slice(0, 12);
-    if (confirmation.trim() !== expected) {
-      throw new Error(`Approval confirmation must match proof prefix ${expected}`);
-    }
-    const approvedAt = new Date().toISOString();
-    const capability = this.signer.issue({
-      operationId: operation.id,
-      kind: operation.kind,
-      proofDigest: operation.proofDigest,
-      stateWitness: operation.stateWitness,
-      statementDigest: statementDigest(operation),
-      expiresAt: operation.expiresAt
-    });
-    const approvalDigest = sha256(JSON.stringify({
-      operationId: operation.id,
-      proofDigest: operation.proofDigest,
-      approvedAt,
-      expiresAt: operation.expiresAt
-    }));
-    const approved = {
-      ...record,
-      status: "approved",
-      approvedAt,
-      approvalDigest,
-      capability
-    };
-    await this.write(approved);
-    return approved;
-  }
+// src/authority-daemon.ts
+import { spawn } from "child_process";
+import { appendFile, chmod, mkdir as mkdir2, rm as rm2 } from "fs/promises";
+import { createServer } from "net";
+import { dirname, join as join3 } from "path";
+var MAX_AUDIT_EVENT_BYTES = 256 * 1024;
+function debug(message) {
+  if (process.env.RECOVERY_AUTHORITY_DEBUG === "1")
+    process.stderr.write(`[authority-daemon] ${message}
+`);
 }
-async function createApprovalBroker(dataDir, keyDir = authorityKeyDir(dataDir)) {
-  const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.loadOrCreate(keyDir, dataDir);
-  const verifier = await PublicCapabilityVerifier.load(dataDir);
-  return new ApprovalBroker(dataDir, store, verifier, signer);
+function bridge(socket, options, children) {
+  debug("proxy connected");
+  const child = spawn(process.execPath, [options.serverEntry], {
+    env: {
+      ...process.env,
+      PLUGIN_ROOT: options.pluginRoot,
+      RECOVERY_AUTHORITY_DATA_DIR: options.dataDir,
+      RECOVERY_AUTHORITY_KEY_DIR: options.keyDir,
+      RECOVERY_AUTHORITY_SANDBOX_HOST: "1",
+      RECOVERY_AUTHORITY_WORKSPACE_ROOT: options.workspaceRoot
+    },
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  children.add(child);
+  debug(`spawned MCP server pid=${child.pid ?? "unknown"}`);
+  socket.on("data", (chunk) => debug(`proxy -> MCP ${chunk.length} bytes`));
+  child.stdout.on("data", (chunk) => debug(`MCP -> proxy ${chunk.length} bytes`));
+  socket.pipe(child.stdin);
+  child.stdout.pipe(socket);
+  child.stderr.pipe(process.stderr);
+  const stopChild = () => {
+    if (!child.killed)
+      child.kill("SIGTERM");
+  };
+  socket.on("end", () => debug("proxy request stream ended"));
+  socket.on("error", (error) => {
+    debug(`proxy error: ${error.message}`);
+    stopChild();
+  });
+  socket.on("close", () => {
+    debug("proxy socket closed");
+    stopChild();
+  });
+  child.on("error", (error) => socket.destroy(error));
+  child.on("exit", (code, signal) => {
+    debug(`MCP server exited code=${code ?? "null"} signal=${signal ?? "none"}`);
+    children.delete(child);
+    socket.end();
+  });
+}
+function listen(server, socketPath) {
+  return new Promise((resolvePromise, reject) => {
+    const onError = (error) => reject(error);
+    server.once("error", onError);
+    server.listen(socketPath, () => {
+      server.off("error", onError);
+      resolvePromise();
+    });
+  });
+}
+function auditBridge(socket, dataDir) {
+  const chunks = [];
+  let size = 0;
+  socket.on("data", (chunk) => {
+    size += chunk.length;
+    if (size > MAX_AUDIT_EVENT_BYTES) {
+      socket.destroy(new Error("Audit event exceeds size limit"));
+      return;
+    }
+    chunks.push(chunk);
+  });
+  socket.on("end", async () => {
+    try {
+      const event = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (!event || typeof event !== "object" || Array.isArray(event) || "command" in event) {
+        throw new Error("Invalid sanitized audit event");
+      }
+      await appendFile(join3(dataDir, "hook-events.jsonl"), `${JSON.stringify(event)}
+`, { mode: 384 });
+      socket.end("ok");
+    } catch (error) {
+      socket.destroy(error);
+    }
+  });
+}
+async function startAuthorityDaemon(options) {
+  await mkdir2(dirname(options.socketPath), { recursive: true, mode: 448 });
+  await rm2(options.socketPath, { force: true });
+  const children = new Set;
+  const server = createServer({ allowHalfOpen: true }, (socket) => bridge(socket, options, children));
+  const auditServer = createServer({ allowHalfOpen: true }, (socket) => auditBridge(socket, options.dataDir));
+  await listen(server, options.socketPath);
+  await listen(auditServer, options.auditSocketPath);
+  debug(`listening on ${options.socketPath}`);
+  await Promise.all([chmod(options.socketPath, 384), chmod(options.auditSocketPath, 384)]);
+  return {
+    close: async () => {
+      for (const child of children)
+        child.kill("SIGTERM");
+      await Promise.all([
+        new Promise((resolvePromise) => server.close(() => resolvePromise())),
+        new Promise((resolvePromise) => auditServer.close(() => resolvePromise()))
+      ]);
+      await Promise.all([
+        rm2(options.socketPath, { force: true }),
+        rm2(options.auditSocketPath, { force: true })
+      ]);
+    }
+  };
 }
 
-// src/approve.ts
+// src/sandbox.ts
 function option(args, name) {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 }
 function parseArguments() {
   const args = process.argv.slice(2);
-  if (!["approve", "init"].includes(args[0] ?? "")) {
-    throw new Error("Usage: init|approve [operation-id] --data-dir <path> [--key-dir <path>]");
+  if (args[0] !== "sandbox") {
+    throw new Error("Usage: sandbox --workspace <path> --data-dir <path> [--key-dir <path>] [--stage-codex-home] [--isolate-network] -- <command...>");
   }
-  const dataDirValue = option(args, "--data-dir") ?? process.env.RECOVERY_AUTHORITY_DATA_DIR;
-  if (!dataDirValue)
-    throw new Error("Authority command requires --data-dir or RECOVERY_AUTHORITY_DATA_DIR");
+  const separator = args.indexOf("--");
+  if (separator < 0 || separator === args.length - 1)
+    throw new Error("Sandbox requires -- followed by a command");
+  const workspace = option(args.slice(0, separator), "--workspace");
+  const dataDirValue = option(args.slice(0, separator), "--data-dir");
+  if (!workspace || !dataDirValue)
+    throw new Error("Sandbox requires --workspace and --data-dir");
   const dataDir = resolve3(dataDirValue);
-  const keyDir = authorityKeyDir(dataDir, option(args, "--key-dir") ?? process.env.RECOVERY_AUTHORITY_KEY_DIR);
-  if (args[0] === "init")
-    return { command: "init", dataDir, keyDir };
-  if (!args[1] || args[1].startsWith("--"))
-    throw new Error("Approval requires an operation ID");
-  return { command: "approve", operationId: args[1], dataDir, keyDir };
+  return {
+    workspace: resolve3(workspace),
+    dataDir,
+    keyDir: authorityKeyDir(dataDir, option(args.slice(0, separator), "--key-dir")),
+    command: args.slice(separator + 1),
+    isolateNetwork: args.slice(0, separator).includes("--isolate-network"),
+    stageCodexHome: args.slice(0, separator).includes("--stage-codex-home") || basename(args[separator + 1] ?? "") === "codex",
+    codexHome: null
+  };
+}
+function containsPath(container, candidate) {
+  const rel = relative(container, candidate);
+  return rel === "" || rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+function assertDisjoint(label, workspace, protectedPath) {
+  if (containsPath(workspace, protectedPath) || containsPath(protectedPath, workspace)) {
+    throw new Error(`${label} must be outside and disjoint from the writable workspace`);
+  }
+}
+function serverEntry() {
+  const current = fileURLToPath(import.meta.url);
+  const source = current.endsWith(".ts");
+  return join4(dirname2(current), source ? "server.ts" : "server.js");
+}
+async function waitForExit(child) {
+  return await new Promise((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) {
+        process.stderr.write(`Sandboxed command terminated by ${signal}
+`);
+        resolvePromise(128);
+        return;
+      }
+      resolvePromise(code ?? 1);
+    });
+  });
+}
+function bubblewrapArguments(input, runtimeDir, socketPath, auditSocketPath) {
+  const args = [
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    "--proc",
+    "/proc",
+    "--tmpfs",
+    "/tmp",
+    "--unshare-user",
+    "--disable-userns",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--die-with-parent",
+    "--new-session",
+    "--cap-drop",
+    "ALL",
+    "--tmpfs",
+    input.dataDir,
+    "--tmpfs",
+    input.keyDir,
+    "--bind",
+    runtimeDir,
+    runtimeDir,
+    "--bind",
+    input.workspace,
+    input.workspace,
+    "--setenv",
+    "RECOVERY_AUTHORITY_MCP_SOCKET",
+    socketPath,
+    "--setenv",
+    "RECOVERY_AUTHORITY_AUDIT_SOCKET",
+    auditSocketPath,
+    "--setenv",
+    "RECOVERY_AUTHORITY_DATA_DIR",
+    input.dataDir,
+    "--setenv",
+    "RECOVERY_AUTHORITY_KEY_DIR",
+    input.keyDir,
+    "--setenv",
+    "RECOVERY_AUTHORITY_SANDBOX",
+    "1",
+    "--chdir",
+    input.workspace
+  ];
+  if (input.codexHome)
+    args.push("--setenv", "CODEX_HOME", input.codexHome);
+  if (input.isolateNetwork)
+    args.push("--unshare-net");
+  return [...args, "--", ...input.command];
+}
+async function pathExists(path) {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return false;
+    throw error;
+  }
+}
+async function stageCodexHome(runtimeDir) {
+  const source = await realpath(resolve3(process.env.CODEX_HOME ?? join4(homedir(), ".codex")));
+  const destination = join4(runtimeDir, "codex-home");
+  await mkdir3(destination, { recursive: true, mode: 448 });
+  const copiedFiles = [
+    "auth.json",
+    "config.toml",
+    "installation_id",
+    "models_cache.json",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal",
+    "version.json"
+  ];
+  for (const name of copiedFiles) {
+    const sourcePath = join4(source, name);
+    if (await pathExists(sourcePath))
+      await cp(sourcePath, join4(destination, name), { preserveTimestamps: true });
+  }
+  for (const name of ["cache", "memories", "packages", "plugins", "rules", "skills"]) {
+    const sourcePath = join4(source, name);
+    if (await pathExists(sourcePath))
+      await symlink(sourcePath, join4(destination, name), "dir");
+  }
+  for (const name of ["log", "mcp-oauth-locks", "sessions", "shell_snapshots", "tmp"]) {
+    await mkdir3(join4(destination, name), { recursive: true, mode: 448 });
+  }
+  return destination;
 }
 async function main() {
-  const arguments_ = parseArguments();
-  if (arguments_.command === "init") {
-    await initializeAuthority(arguments_.dataDir, arguments_.keyDir);
-    process.stdout.write(`${JSON.stringify({ initialized: true, dataDir: arguments_.dataDir })}
-`);
-    return;
+  if (process.platform !== "linux")
+    throw new Error("The enforceable sandbox currently requires Linux");
+  const available = spawnSync("bwrap", ["--version"], { encoding: "utf8" });
+  if (available.status !== 0)
+    throw new Error("bubblewrap (bwrap) is required and was not found on PATH");
+  const parsed = parseArguments();
+  await Promise.all([
+    mkdir3(parsed.dataDir, { recursive: true, mode: 448 }),
+    mkdir3(parsed.keyDir, { recursive: true, mode: 448 })
+  ]);
+  parsed.workspace = await realpath(parsed.workspace);
+  parsed.dataDir = await realpath(parsed.dataDir);
+  parsed.keyDir = await realpath(parsed.keyDir);
+  assertDisjoint("Authority data directory", parsed.workspace, parsed.dataDir);
+  assertDisjoint("Authority signing directory", parsed.workspace, parsed.keyDir);
+  if (containsPath(parsed.dataDir, parsed.keyDir) || containsPath(parsed.keyDir, parsed.dataDir)) {
+    throw new Error("Authority data and signing directories must be disjoint");
   }
-  const { operationId, dataDir, keyDir } = arguments_;
-  if (!process.stdin.isTTY && process.env.RECOVERY_AUTHORITY_ALLOW_NONINTERACTIVE_APPROVAL !== "1") {
-    throw new Error("Human approval requires an interactive terminal");
+  await initializeAuthority(parsed.dataDir, parsed.keyDir);
+  const runtimeDir = await mkdtemp(join4(tmpdir(), "recovery-authority-sandbox-"));
+  if (parsed.stageCodexHome)
+    parsed.codexHome = await stageCodexHome(runtimeDir);
+  const socketPath = join4(runtimeDir, "authority.sock");
+  const auditSocketPath = join4(runtimeDir, "audit.sock");
+  const pluginRoot = resolve3(dirname2(fileURLToPath(import.meta.url)), "..");
+  const daemon = await startAuthorityDaemon({
+    socketPath,
+    auditSocketPath,
+    serverEntry: serverEntry(),
+    dataDir: parsed.dataDir,
+    keyDir: parsed.keyDir,
+    pluginRoot,
+    workspaceRoot: parsed.workspace
+  });
+  try {
+    const child = spawn2("bwrap", bubblewrapArguments(parsed, runtimeDir, socketPath, auditSocketPath), {
+      env: process.env,
+      stdio: "inherit"
+    });
+    process.exitCode = await waitForExit(child);
+  } finally {
+    await daemon.close();
+    await rm3(runtimeDir, { recursive: true, force: true });
   }
-  const operation = await new OperationStore(dataDir).get(operationId);
-  const proofPrefix = operation.proofDigest.slice(0, 12);
-  process.stderr.write([
-    `
-Recovery Authority approval
-`,
-    `Operation: ${operation.id}
-`,
-    `Effect:    ${operation.kind}
-`,
-    `Scope:     ${operation.paths.join(", ")}
-`,
-    `Reason:    ${operation.reason}
-`,
-    `Expires:   ${operation.expiresAt}
-`,
-    `Proof:     ${operation.proofDigest}
-
-`
-  ].join(""));
-  const terminal = createInterface({ input: process.stdin, output: process.stderr });
-  const confirmation = await terminal.question(`Type proof prefix ${proofPrefix} to approve: `);
-  terminal.close();
-  const approved = await (await createApprovalBroker(dataDir, keyDir)).approve(operationId, confirmation);
-  const { capability: _capability, ...receipt } = approved;
-  process.stdout.write(`${JSON.stringify(receipt, null, 2)}
-`);
 }
 if (import.meta.main)
   await main();
+export {
+  bubblewrapArguments
+};

@@ -1,18 +1,20 @@
 {
   "name": "recovery-authority",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
   "scripts": {
-    "build": "bun build ./src/server.ts ./src/pre-tool-hook.ts ./src/approve.ts ./src/demo.ts --outdir ./dist --target bun",
+    "build": "bun build ./src/server.ts ./src/pre-tool-hook.ts ./src/approve.ts ./src/demo.ts ./src/mcp-proxy.ts ./src/sandbox.ts --outdir ./dist --target bun",
     "approve": "bun run ./src/approve.ts approve",
+    "sandbox": "bun run ./src/sandbox.ts sandbox",
     "demo": "bash ./scripts/demo-postgres.sh",
     "check": "tsc --noEmit",
     "dev": "bun run ./src/server.ts",
     "test": "bun test",
     "test:hook": "node ./scripts/smoke-hook.mjs",
-    "test:mcp": "node ./scripts/smoke-mcp.mjs"
+    "test:mcp": "node ./scripts/smoke-mcp.mjs",
+    "test:bundle": "node ./scripts/smoke-server-boundary.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",

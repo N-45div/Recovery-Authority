@@ -1,21 +1,41 @@
 import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
 import { createApprovalBroker } from "./approval.js";
+import { authorityKeyDir } from "./crypto.js";
+import { initializeAuthority } from "./signer.js";
 import { OperationStore } from "./store.js";
 
-function parseArguments(): { operationId: string; dataDir: string } {
+type ApprovalArguments =
+  | { command: "init"; dataDir: string; keyDir: string }
+  | { command: "approve"; operationId: string; dataDir: string; keyDir: string };
+
+function option(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function parseArguments(): ApprovalArguments {
   const args = process.argv.slice(2);
-  if (args[0] !== "approve" || !args[1]) {
-    throw new Error("Usage: approve <operation-id> [--data-dir <path>]");
+  if (!(["approve", "init"] as string[]).includes(args[0] ?? "")) {
+    throw new Error("Usage: init|approve [operation-id] --data-dir <path> [--key-dir <path>]");
   }
-  const dataDirIndex = args.indexOf("--data-dir");
-  const dataDir = dataDirIndex >= 0 ? args[dataDirIndex + 1] : process.env.RECOVERY_AUTHORITY_DATA_DIR;
-  if (!dataDir) throw new Error("Approval requires --data-dir or RECOVERY_AUTHORITY_DATA_DIR");
-  return { operationId: args[1], dataDir: resolve(dataDir) };
+  const dataDirValue = option(args, "--data-dir") ?? process.env.RECOVERY_AUTHORITY_DATA_DIR;
+  if (!dataDirValue) throw new Error("Authority command requires --data-dir or RECOVERY_AUTHORITY_DATA_DIR");
+  const dataDir = resolve(dataDirValue);
+  const keyDir = authorityKeyDir(dataDir, option(args, "--key-dir") ?? process.env.RECOVERY_AUTHORITY_KEY_DIR);
+  if (args[0] === "init") return { command: "init", dataDir, keyDir };
+  if (!args[1] || args[1].startsWith("--")) throw new Error("Approval requires an operation ID");
+  return { command: "approve", operationId: args[1], dataDir, keyDir };
 }
 
 async function main(): Promise<void> {
-  const { operationId, dataDir } = parseArguments();
+  const arguments_ = parseArguments();
+  if (arguments_.command === "init") {
+    await initializeAuthority(arguments_.dataDir, arguments_.keyDir);
+    process.stdout.write(`${JSON.stringify({ initialized: true, dataDir: arguments_.dataDir })}\n`);
+    return;
+  }
+  const { operationId, dataDir, keyDir } = arguments_;
   if (!process.stdin.isTTY && process.env.RECOVERY_AUTHORITY_ALLOW_NONINTERACTIVE_APPROVAL !== "1") {
     throw new Error("Human approval requires an interactive terminal");
   }
@@ -34,7 +54,7 @@ async function main(): Promise<void> {
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
   const confirmation = await terminal.question(`Type proof prefix ${proofPrefix} to approve: `);
   terminal.close();
-  const approved = await (await createApprovalBroker(dataDir)).approve(operationId, confirmation);
+  const approved = await (await createApprovalBroker(dataDir, keyDir)).approve(operationId, confirmation);
   const { capability: _capability, ...receipt } = approved;
   process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
 }

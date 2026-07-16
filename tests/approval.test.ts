@@ -3,13 +3,19 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApprovalBroker } from "../src/approval.js";
-import { createFilesystemRecoveryService } from "../src/filesystem.js";
+import { createFilesystemRecoveryService as createUninitializedFilesystemService } from "../src/filesystem.js";
+import { initializeAuthority } from "../src/signer.js";
 
 const temporaryRoots: string[] = [];
 
+async function createFilesystemRecoveryService(dataDir: string) {
+  await initializeAuthority(dataDir);
+  return createUninitializedFilesystemService(dataDir);
+}
+
 async function temporaryRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
-  temporaryRoots.push(root);
+  temporaryRoots.push(root, `${root}.keys`);
   return root;
 }
 

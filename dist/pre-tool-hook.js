@@ -10634,8 +10634,9 @@ var require_src = __commonJS((exports, module) => {
 });
 
 // src/pre-tool-hook.ts
-import { appendFile, mkdir as mkdir2 } from "fs/promises";
-import { resolve } from "path";
+import { appendFile, mkdir } from "fs/promises";
+import { createConnection } from "net";
+import { resolve as resolve2 } from "path";
 
 // node_modules/zod/v3/external.js
 var exports_external = {};
@@ -14611,16 +14612,13 @@ var coerce = {
 };
 var NEVER = INVALID;
 // src/crypto.ts
-import { createHash, generateKeyPairSync, sign, verify } from "crypto";
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { createHash, verify } from "crypto";
+import { readFile } from "fs/promises";
+import { join, resolve } from "path";
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
-function base64url(value) {
-  return Buffer.from(value).toString("base64url");
-}
-var CapabilityClaims = exports_external.object({
+var CapabilityClaimsSchema = exports_external.object({
   operationId: exports_external.string().uuid(),
   kind: exports_external.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard", "postgres.schema-mutate"]),
   proofDigest: exports_external.string(),
@@ -14628,50 +14626,32 @@ var CapabilityClaims = exports_external.object({
   statementDigest: exports_external.string().nullable().default(null),
   expiresAt: exports_external.string().datetime()
 });
+function authorityKeyDir(dataDir, configured = process.env.RECOVERY_AUTHORITY_KEY_DIR) {
+  return resolve(configured ?? `${resolve(dataDir)}.keys`);
+}
 
-class CapabilitySigner {
-  privateKey;
+class PublicCapabilityVerifier {
   publicKey;
-  constructor(privateKey, publicKey) {
-    this.privateKey = privateKey;
+  constructor(publicKey) {
     this.publicKey = publicKey;
   }
   static async load(dataDir) {
-    await mkdir(dataDir, { recursive: true, mode: 448 });
-    const privatePath = join(dataDir, "authority-private.pem");
-    const publicPath = join(dataDir, "authority-public.pem");
-    try {
-      const [privateKey, publicKey] = await Promise.all([
-        readFile(privatePath, "utf8"),
-        readFile(publicPath, "utf8")
-      ]);
-      return new CapabilitySigner(privateKey, publicKey);
-    } catch {
-      const pair = generateKeyPairSync("ed25519", {
-        privateKeyEncoding: { type: "pkcs8", format: "pem" },
-        publicKeyEncoding: { type: "spki", format: "pem" }
-      });
-      await Promise.all([
-        writeFile(privatePath, pair.privateKey, { mode: 384 }),
-        writeFile(publicPath, pair.publicKey, { mode: 420 })
-      ]);
-      return new CapabilitySigner(pair.privateKey, pair.publicKey);
-    }
-  }
-  issue(claims) {
-    const payload = base64url(JSON.stringify(claims));
-    const signature = sign(null, Buffer.from(payload), this.privateKey);
-    return `${payload}.${base64url(signature)}`;
+    const publicKey = await readFile(join(dataDir, "authority-public.pem"), "utf8").catch((error) => {
+      if (error.code === "ENOENT") {
+        throw new Error("Recovery Authority is not initialized: the public capability key is missing");
+      }
+      throw error;
+    });
+    return new PublicCapabilityVerifier(publicKey);
   }
   verify(token) {
     const [payload, encodedSignature, extra] = token.split(".");
-    if (!payload || !encodedSignature || extra) {
+    if (!payload || !encodedSignature || extra)
       throw new Error("Malformed capability token");
-    }
     const valid = verify(null, Buffer.from(payload), this.publicKey, Buffer.from(encodedSignature, "base64url"));
     if (!valid)
       throw new Error("Invalid capability signature");
-    const claims = CapabilityClaims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    const claims = CapabilityClaimsSchema.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     if (Date.parse(claims.expiresAt) <= Date.now())
       throw new Error("Capability expired");
     return claims;
@@ -14995,9 +14975,8 @@ function evaluateHook(rawInput) {
   return deny(findings, command);
 }
 async function recordDecision(input, decision) {
-  const dataDir = resolve(process.env.PLUGIN_DATA ?? process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
-  await mkdir2(dataDir, { recursive: true, mode: 448 });
-  await appendFile(resolve(dataDir, "hook-events.jsonl"), `${JSON.stringify({
+  const dataDir = resolve2(process.env.PLUGIN_DATA ?? process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+  const event = {
     timestamp: new Date().toISOString(),
     event: input.hook_event_name,
     sessionId: input.session_id ?? null,
@@ -15011,7 +14990,27 @@ async function recordDecision(input, decision) {
     commandDigest: decision.command ? sha256(decision.command) : null,
     blocked: decision.blocked,
     findings: decision.findings
-  })}
+  };
+  const auditSocket = process.env.RECOVERY_AUTHORITY_AUDIT_SOCKET;
+  if (auditSocket) {
+    await new Promise((resolvePromise, reject) => {
+      const socket = createConnection({ path: auditSocket, allowHalfOpen: true });
+      const timeout = setTimeout(() => socket.destroy(new Error("Audit relay timed out")), 2000);
+      socket.on("connect", () => socket.end(JSON.stringify(event)));
+      socket.on("data", () => {
+        return;
+      });
+      socket.on("error", reject);
+      socket.on("close", (hadError) => {
+        clearTimeout(timeout);
+        if (!hadError)
+          resolvePromise();
+      });
+    });
+    return;
+  }
+  await mkdir(dataDir, { recursive: true, mode: 448 });
+  await appendFile(resolve2(dataDir, "hook-events.jsonl"), `${JSON.stringify(event)}
 `, { mode: 384 });
 }
 async function main() {

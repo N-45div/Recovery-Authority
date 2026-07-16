@@ -1,4 +1,5 @@
 import { appendFile, mkdir } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { sha256 } from "./crypto.js";
@@ -136,26 +137,38 @@ export function evaluateHook(rawInput: unknown): HookDecision {
 
 async function recordDecision(input: HookInput, decision: HookDecision): Promise<void> {
   const dataDir = resolve(process.env.PLUGIN_DATA ?? process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+  const event = {
+    timestamp: new Date().toISOString(),
+    event: input.hook_event_name,
+    sessionId: input.session_id ?? null,
+    turnId: input.turn_id ?? null,
+    agentId: input.agent_id ?? null,
+    agentType: input.agent_type ?? null,
+    permissionMode: input.permission_mode ?? null,
+    model: input.model ?? null,
+    cwd: input.cwd,
+    toolName: input.tool_name ?? null,
+    commandDigest: decision.command ? sha256(decision.command) : null,
+    blocked: decision.blocked,
+    findings: decision.findings,
+  };
+  const auditSocket = process.env.RECOVERY_AUTHORITY_AUDIT_SOCKET;
+  if (auditSocket) {
+    await new Promise<void>((resolvePromise, reject) => {
+      const socket = createConnection({ path: auditSocket, allowHalfOpen: true });
+      const timeout = setTimeout(() => socket.destroy(new Error("Audit relay timed out")), 2_000);
+      socket.on("connect", () => socket.end(JSON.stringify(event)));
+      socket.on("data", () => undefined);
+      socket.on("error", reject);
+      socket.on("close", (hadError) => {
+        clearTimeout(timeout);
+        if (!hadError) resolvePromise();
+      });
+    });
+    return;
+  }
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
-  await appendFile(
-    resolve(dataDir, "hook-events.jsonl"),
-    `${JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: input.hook_event_name,
-      sessionId: input.session_id ?? null,
-      turnId: input.turn_id ?? null,
-      agentId: input.agent_id ?? null,
-      agentType: input.agent_type ?? null,
-      permissionMode: input.permission_mode ?? null,
-      model: input.model ?? null,
-      cwd: input.cwd,
-      toolName: input.tool_name ?? null,
-      commandDigest: decision.command ? sha256(decision.command) : null,
-      blocked: decision.blocked,
-      findings: decision.findings,
-    })}\n`,
-    { mode: 0o600 },
-  );
+  await appendFile(resolve(dataDir, "hook-events.jsonl"), `${JSON.stringify(event)}\n`, { mode: 0o600 });
 }
 
 async function main(): Promise<void> {

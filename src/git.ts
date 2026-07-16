@@ -4,7 +4,7 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writ
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { FileRecord, GitResetHardRecoveryOperation, PrepareGitResetHard } from "./contracts.js";
-import { CapabilitySigner, sha256 } from "./crypto.js";
+import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { collectRecords, recordsWitness, restoreRecords } from "./filesystem.js";
 import { OperationStore } from "./store.js";
 
@@ -145,7 +145,7 @@ export class GitRecoveryService {
   constructor(
     private readonly dataDir: string,
     private readonly store: OperationStore,
-    private readonly signer: CapabilitySigner,
+    private readonly verifier: CapabilityVerifier,
   ) {}
 
   async prepare(input: PrepareGitResetHard): Promise<{ operation: GitResetHardRecoveryOperation }> {
@@ -219,7 +219,7 @@ export class GitRecoveryService {
   async commit(operationId: string, capability: string): Promise<GitResetHardRecoveryOperation> {
     const operation = await this.get(operationId);
     if (operation.status !== "proven") throw new Error(`Operation is not committable: ${operation.status}`);
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (
       claims.operationId !== operation.id ||
       claims.kind !== operation.kind ||
@@ -282,6 +282,6 @@ export class GitRecoveryService {
 
 export async function createGitRecoveryService(dataDir: string): Promise<GitRecoveryService> {
   const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new GitRecoveryService(dataDir, store, signer);
+  const verifier = await PublicCapabilityVerifier.load(dataDir);
+  return new GitRecoveryService(dataDir, store, verifier);
 }

@@ -12,6 +12,7 @@ const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = process.env.PLUGIN_UNDER_TEST ?? sourceRoot;
 const workspace = await mkdtemp(join(tmpdir(), "recovery-mcp-workspace-"));
 const dataDir = await mkdtemp(join(tmpdir(), "recovery-mcp-data-"));
+const keyDir = `${dataDir}.keys`;
 await writeFile(join(workspace, "state.txt"), "recover me");
 const databasePath = join(workspace, "app.sqlite");
 const localBun = join(sourceRoot, ".tools", "bun", "bin", "bun");
@@ -48,6 +49,8 @@ async function approve(preparedOutput) {
       preparedOutput.operation.id,
       "--data-dir",
       dataDir,
+      "--key-dir",
+      keyDir,
     ],
     {
       encoding: "utf8",
@@ -84,6 +87,7 @@ const transport = new StdioClientTransport({
     PATH: process.env.PATH ?? "",
     PLUGIN_ROOT: pluginRoot,
     RECOVERY_AUTHORITY_DATA_DIR: dataDir,
+    RECOVERY_AUTHORITY_KEY_DIR: keyDir,
   },
   stderr: "pipe",
 });
@@ -239,5 +243,6 @@ try {
   await Promise.all([
     rm(workspace, { recursive: true, force: true }),
     rm(dataDir, { recursive: true, force: true }),
+    rm(keyDir, { recursive: true, force: true }),
   ]);
 }

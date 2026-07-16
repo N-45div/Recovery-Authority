@@ -9166,31 +9166,31 @@ var require_pgsql_ast_parser = __commonJS((exports) => {
           ret.years = (m - ret.months) / 12;
         }
         let t = ((_f = ret.hours) !== null && _f !== undefined ? _f : 0) * 3600 + ((_g = ret.minutes) !== null && _g !== undefined ? _g : 0) * 60 + ((_h = ret.seconds) !== null && _h !== undefined ? _h : 0) + ((_j = ret.milliseconds) !== null && _j !== undefined ? _j : 0) / 1000;
-        let sign2 = 1;
+        let sign = 1;
         if (t < 0) {
-          sign2 = -1;
+          sign = -1;
           t = -t;
         }
         if (t >= 3600) {
-          ret.hours = sign2 * Math.floor(t / 3600);
-          t -= sign2 * ret.hours * 3600;
+          ret.hours = sign * Math.floor(t / 3600);
+          t -= sign * ret.hours * 3600;
         } else {
           delete ret.hours;
         }
         if (t >= 60) {
-          ret.minutes = sign2 * Math.floor(t / 60);
-          t -= sign2 * ret.minutes * 60;
+          ret.minutes = sign * Math.floor(t / 60);
+          t -= sign * ret.minutes * 60;
         } else {
           delete ret.minutes;
         }
         if (t > 0) {
-          ret.seconds = sign2 * Math.floor(t);
-          t -= sign2 * ret.seconds;
+          ret.seconds = sign * Math.floor(t);
+          t -= sign * ret.seconds;
         } else {
           delete ret.seconds;
         }
         if (t > 0) {
-          ret.milliseconds = sign2 * Math.round(t * 1000);
+          ret.milliseconds = sign * Math.round(t * 1000);
         } else {
           delete ret.milliseconds;
         }
@@ -26845,7 +26845,8 @@ class StdioServerTransport {
 }
 
 // src/server.ts
-import { resolve as resolve5 } from "path";
+import { resolve as resolve6 } from "path";
+import { realpath as realpath5 } from "fs/promises";
 
 // src/contracts.ts
 var PrepareFilesystemDeleteInput = exports_external.object({
@@ -26957,21 +26958,18 @@ var RecoveryOperation = exports_external.discriminatedUnion("kind", [
   PostgresRecoveryOperation
 ]);
 
-// src/approval.ts
-import { mkdir as mkdir3, readFile as readFile3, rename as rename2, writeFile as writeFile3 } from "fs/promises";
+// src/authorization.ts
+import { mkdir as mkdir2, readFile as readFile3, rename as rename2, writeFile as writeFile2 } from "fs/promises";
 import { join as join3 } from "path";
 
 // src/crypto.ts
-import { createHash, generateKeyPairSync, sign, verify } from "crypto";
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { createHash, verify } from "crypto";
+import { readFile } from "fs/promises";
+import { join, resolve } from "path";
 function sha256(value2) {
   return createHash("sha256").update(value2).digest("hex");
 }
-function base64url2(value2) {
-  return Buffer.from(value2).toString("base64url");
-}
-var CapabilityClaims = exports_external.object({
+var CapabilityClaimsSchema = exports_external.object({
   operationId: exports_external.string().uuid(),
   kind: exports_external.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard", "postgres.schema-mutate"]),
   proofDigest: exports_external.string(),
@@ -26979,50 +26977,32 @@ var CapabilityClaims = exports_external.object({
   statementDigest: exports_external.string().nullable().default(null),
   expiresAt: exports_external.string().datetime()
 });
+function authorityKeyDir(dataDir, configured = process.env.RECOVERY_AUTHORITY_KEY_DIR) {
+  return resolve(configured ?? `${resolve(dataDir)}.keys`);
+}
 
-class CapabilitySigner {
-  privateKey;
+class PublicCapabilityVerifier {
   publicKey;
-  constructor(privateKey, publicKey) {
-    this.privateKey = privateKey;
+  constructor(publicKey) {
     this.publicKey = publicKey;
   }
   static async load(dataDir) {
-    await mkdir(dataDir, { recursive: true, mode: 448 });
-    const privatePath = join(dataDir, "authority-private.pem");
-    const publicPath = join(dataDir, "authority-public.pem");
-    try {
-      const [privateKey, publicKey] = await Promise.all([
-        readFile(privatePath, "utf8"),
-        readFile(publicPath, "utf8")
-      ]);
-      return new CapabilitySigner(privateKey, publicKey);
-    } catch {
-      const pair = generateKeyPairSync("ed25519", {
-        privateKeyEncoding: { type: "pkcs8", format: "pem" },
-        publicKeyEncoding: { type: "spki", format: "pem" }
-      });
-      await Promise.all([
-        writeFile(privatePath, pair.privateKey, { mode: 384 }),
-        writeFile(publicPath, pair.publicKey, { mode: 420 })
-      ]);
-      return new CapabilitySigner(pair.privateKey, pair.publicKey);
-    }
-  }
-  issue(claims) {
-    const payload = base64url2(JSON.stringify(claims));
-    const signature = sign(null, Buffer.from(payload), this.privateKey);
-    return `${payload}.${base64url2(signature)}`;
+    const publicKey = await readFile(join(dataDir, "authority-public.pem"), "utf8").catch((error2) => {
+      if (error2.code === "ENOENT") {
+        throw new Error("Recovery Authority is not initialized: the public capability key is missing");
+      }
+      throw error2;
+    });
+    return new PublicCapabilityVerifier(publicKey);
   }
   verify(token) {
     const [payload, encodedSignature, extra] = token.split(".");
-    if (!payload || !encodedSignature || extra) {
+    if (!payload || !encodedSignature || extra)
       throw new Error("Malformed capability token");
-    }
     const valid = verify(null, Buffer.from(payload), this.publicKey, Buffer.from(encodedSignature, "base64url"));
     if (!valid)
       throw new Error("Invalid capability signature");
-    const claims = CapabilityClaims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    const claims = CapabilityClaimsSchema.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     if (Date.parse(claims.expiresAt) <= Date.now())
       throw new Error("Capability expired");
     return claims;
@@ -27030,7 +27010,7 @@ class CapabilitySigner {
 }
 
 // src/store.ts
-import { mkdir as mkdir2, readFile as readFile2, rename, writeFile as writeFile2 } from "fs/promises";
+import { mkdir, readFile as readFile2, rename, writeFile } from "fs/promises";
 import { join as join2 } from "path";
 class OperationStore {
   dataDir;
@@ -27041,7 +27021,7 @@ class OperationStore {
     this.path = join2(dataDir, "operations.json");
   }
   async read() {
-    await mkdir2(this.dataDir, { recursive: true, mode: 448 });
+    await mkdir(this.dataDir, { recursive: true, mode: 448 });
     try {
       const raw = JSON.parse(await readFile2(this.path, "utf8"));
       const operations = Object.fromEntries(Object.entries(raw.operations ?? {}).map(([id, operation]) => [
@@ -27057,7 +27037,7 @@ class OperationStore {
   }
   async write(document) {
     const temporaryPath = `${this.path}.${process.pid}.tmp`;
-    await writeFile2(temporaryPath, `${JSON.stringify(document, null, 2)}
+    await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}
 `, { mode: 384 });
     await rename(temporaryPath, this.path);
   }
@@ -27081,8 +27061,8 @@ class OperationStore {
   }
 }
 
-// src/approval.ts
-var AuthorizationRecord = exports_external.object({
+// src/authorization.ts
+var AuthorizationRecordSchema = exports_external.object({
   operationId: exports_external.string().uuid(),
   status: exports_external.enum(["pending", "approved", "expired"]),
   proofDigest: exports_external.string(),
@@ -27096,30 +27076,28 @@ function statementDigest(operation) {
   return "statementDigest" in operation ? operation.statementDigest : null;
 }
 
-class ApprovalBroker {
-  dataDir;
+class AuthorizationRegistry {
   store;
-  signer;
+  verifier;
   approvalsDir;
-  constructor(dataDir, store, signer) {
-    this.dataDir = dataDir;
+  constructor(dataDir, store, verifier) {
     this.store = store;
-    this.signer = signer;
+    this.verifier = verifier;
     this.approvalsDir = join3(dataDir, "approvals");
   }
   path(operationId) {
     return join3(this.approvalsDir, `${operationId}.json`);
   }
   async write(record3) {
-    await mkdir3(this.approvalsDir, { recursive: true, mode: 448 });
+    await mkdir2(this.approvalsDir, { recursive: true, mode: 448 });
     const path = this.path(record3.operationId);
     const temporaryPath = `${path}.${process.pid}.tmp`;
-    await writeFile3(temporaryPath, `${JSON.stringify(record3, null, 2)}
+    await writeFile2(temporaryPath, `${JSON.stringify(record3, null, 2)}
 `, { mode: 384 });
     await rename2(temporaryPath, path);
   }
   async read(operationId) {
-    return AuthorizationRecord.parse(JSON.parse(await readFile3(this.path(operationId), "utf8")));
+    return AuthorizationRecordSchema.parse(JSON.parse(await readFile3(this.path(operationId), "utf8")));
   }
   async request(operation) {
     const record3 = {
@@ -27147,50 +27125,12 @@ class ApprovalBroker {
       return expired;
     }
     if (record3.status === "approved" && record3.capability) {
-      const claims = this.signer.verify(record3.capability);
+      const claims = this.verifier.verify(record3.capability);
       if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness || claims.statementDigest !== statementDigest(operation)) {
         throw new Error("Approved capability is not bound to this recovery proof");
       }
     }
     return record3;
-  }
-  async approve(operationId, confirmation) {
-    const operation = await this.store.get(operationId);
-    if (operation.status !== "proven")
-      throw new Error(`Operation is not approvable: ${operation.status}`);
-    if (Date.parse(operation.expiresAt) <= Date.now())
-      throw new Error("Recovery proof expired before approval");
-    const record3 = await this.get(operationId);
-    if (record3.status === "approved")
-      return record3;
-    const expected = operation.proofDigest.slice(0, 12);
-    if (confirmation.trim() !== expected) {
-      throw new Error(`Approval confirmation must match proof prefix ${expected}`);
-    }
-    const approvedAt = new Date().toISOString();
-    const capability = this.signer.issue({
-      operationId: operation.id,
-      kind: operation.kind,
-      proofDigest: operation.proofDigest,
-      stateWitness: operation.stateWitness,
-      statementDigest: statementDigest(operation),
-      expiresAt: operation.expiresAt
-    });
-    const approvalDigest = sha256(JSON.stringify({
-      operationId: operation.id,
-      proofDigest: operation.proofDigest,
-      approvedAt,
-      expiresAt: operation.expiresAt
-    }));
-    const approved = {
-      ...record3,
-      status: "approved",
-      approvedAt,
-      approvalDigest,
-      capability
-    };
-    await this.write(approved);
-    return approved;
   }
   async assertAuthorized(operationId, capability) {
     const record3 = await this.get(operationId);
@@ -27201,23 +27141,18 @@ class ApprovalBroker {
       throw new Error("Capability does not match the human-approved authorization");
   }
 }
-async function createApprovalBroker(dataDir) {
-  const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new ApprovalBroker(dataDir, store, signer);
-}
 
 // src/filesystem.ts
-import { chmod, cp, lstat, mkdir as mkdir4, mkdtemp, readFile as readFile5, readlink, realpath as realpath2, rm, symlink } from "fs/promises";
+import { chmod, cp, lstat, mkdir as mkdir3, mkdtemp, readFile as readFile5, readlink, realpath as realpath2, rm, symlink } from "fs/promises";
 import { tmpdir } from "os";
-import { dirname, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+import { dirname, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve3, sep as sep2 } from "path";
 import { randomUUID } from "crypto";
 
 // src/identity.ts
 import { readFile as readFile4, realpath } from "fs/promises";
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
-import { isAbsolute, relative, resolve, sep } from "path";
+import { isAbsolute, relative, resolve as resolve2, sep } from "path";
 function passwdHome(contents, uid) {
   for (const line of contents.split(`
 `)) {
@@ -27245,7 +27180,7 @@ async function canonicalIfPresent(path) {
   try {
     return await realpath(path);
   } catch {
-    return resolve(path);
+    return resolve2(path);
   }
 }
 async function inspectRuntimeIdentity(dataDir) {
@@ -27281,7 +27216,7 @@ async function inspectRuntimeIdentity(dataDir) {
   const environmentHome = process.env.HOME ?? process.env.USERPROFILE ?? null;
   const canonicalAccountHome = await canonicalIfPresent(accountHome);
   const canonicalEnvironmentHome = await canonicalIfPresent(environmentHome);
-  const authorityDataRoot = await canonicalIfPresent(resolve(dataDir));
+  const authorityDataRoot = await canonicalIfPresent(resolve2(dataDir));
   const warnings = [];
   if (!canonicalAccountHome)
     warnings.push("OS account home could not be resolved independently of the process environment");
@@ -27370,11 +27305,11 @@ function recordsWitness(records) {
 }
 async function restoreRecords(payloadRoot, destinationRoot, records) {
   for (const record3 of records.filter((item) => item.kind === "directory").sort((a, b) => a.path.length - b.path.length)) {
-    await mkdir4(join4(destinationRoot, record3.path), { recursive: true, mode: record3.mode });
+    await mkdir3(join4(destinationRoot, record3.path), { recursive: true, mode: record3.mode });
   }
   for (const record3 of records.filter((item) => item.kind !== "directory")) {
     const destination = join4(destinationRoot, record3.path);
-    await mkdir4(dirname(destination), { recursive: true });
+    await mkdir3(dirname(destination), { recursive: true });
     if (record3.kind === "symlink") {
       if (!record3.symlinkTarget)
         throw new Error(`Missing symlink target for ${record3.path}`);
@@ -27392,16 +27327,16 @@ async function restoreRecords(payloadRoot, destinationRoot, records) {
 class FilesystemRecoveryService {
   dataDir;
   store;
-  signer;
-  constructor(dataDir, store, signer) {
+  verifier;
+  constructor(dataDir, store, verifier) {
     this.dataDir = dataDir;
     this.store = store;
-    this.signer = signer;
+    this.verifier = verifier;
   }
   async prepare(input) {
-    const workspaceRoot = await realpath2(resolve2(input.workspaceRoot));
+    const workspaceRoot = await realpath2(resolve3(input.workspaceRoot));
     const requestedPaths = [...new Set(input.paths.map((path) => path.replace(/^\.\//, "")))];
-    const absolutePaths = requestedPaths.map((path) => resolve2(workspaceRoot, path)).sort();
+    const absolutePaths = requestedPaths.map((path) => resolve3(workspaceRoot, path)).sort();
     absolutePaths.forEach((path) => assertInside(workspaceRoot, path));
     const identity = await inspectRuntimeIdentity(this.dataDir);
     for (const path of absolutePaths) {
@@ -27420,10 +27355,10 @@ class FilesystemRecoveryService {
     const id = randomUUID();
     const artifactDir = join4(this.dataDir, "artifacts", id);
     const payloadRoot = join4(artifactDir, "payload");
-    await mkdir4(payloadRoot, { recursive: true, mode: 448 });
+    await mkdir3(payloadRoot, { recursive: true, mode: 448 });
     for (const absolutePath of absolutePaths) {
       const destination = join4(payloadRoot, relative2(workspaceRoot, absolutePath));
-      await mkdir4(dirname(destination), { recursive: true });
+      await mkdir3(dirname(destination), { recursive: true });
       await cp(absolutePath, destination, { recursive: true, dereference: false, preserveTimestamps: true });
     }
     const restoreRoot = await mkdtemp(join4(tmpdir(), "recovery-authority-proof-"));
@@ -27464,7 +27399,7 @@ class FilesystemRecoveryService {
       throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
     if (operation.status !== "proven")
       throw new Error(`Operation is not committable: ${operation.status}`);
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness) {
       throw new Error("Capability is not bound to this recovery proof");
     }
@@ -27508,9 +27443,9 @@ class FilesystemRecoveryService {
 // src/git.ts
 import { execFile } from "child_process";
 import { randomUUID as randomUUID2 } from "crypto";
-import { chmod as chmod2, cp as cp2, lstat as lstat2, mkdir as mkdir5, mkdtemp as mkdtemp2, readFile as readFile6, readdir, realpath as realpath3, rm as rm2, writeFile as writeFile4 } from "fs/promises";
+import { chmod as chmod2, cp as cp2, lstat as lstat2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile6, readdir, realpath as realpath3, rm as rm2, writeFile as writeFile3 } from "fs/promises";
 import { tmpdir as tmpdir2 } from "os";
-import { basename, join as join5, resolve as resolve3 } from "path";
+import { basename, join as join5, resolve as resolve4 } from "path";
 function runGit(cwd, args) {
   return new Promise((resolvePromise, reject) => {
     execFile("git", args, {
@@ -27539,14 +27474,14 @@ async function pathExists2(path) {
 }
 async function gitPath(repositoryRoot, name) {
   const path = await runGit(repositoryRoot, ["rev-parse", "--git-path", name]);
-  return resolve3(repositoryRoot, path);
+  return resolve4(repositoryRoot, path);
 }
 async function collectWorktreeRecords(repositoryRoot) {
   const entries = (await readdir(repositoryRoot)).filter((entry) => entry !== ".git").sort();
   return (await Promise.all(entries.map((entry) => collectRecords(repositoryRoot, join5(repositoryRoot, entry))))).flat();
 }
 async function copyWorktree(repositoryRoot, payloadRoot) {
-  await mkdir5(payloadRoot, { recursive: true, mode: 448 });
+  await mkdir4(payloadRoot, { recursive: true, mode: 448 });
   for (const entry of (await readdir(repositoryRoot)).filter((item) => item !== ".git")) {
     await cp2(join5(repositoryRoot, entry), join5(payloadRoot, entry), {
       recursive: true,
@@ -27585,7 +27520,7 @@ async function restoreGitState(repositoryRoot, payloadRoot, originalHead, index,
   const records = await collectWorktreeRecords(payloadRoot);
   await restoreRecords(payloadRoot, repositoryRoot, records);
   const indexPath = await gitPath(repositoryRoot, "index");
-  await writeFile4(indexPath, index, { mode: 384 });
+  await writeFile3(indexPath, index, { mode: 384 });
   await chmod2(indexPath, indexMode);
 }
 async function assertSupportedRepository(repositoryRoot) {
@@ -27614,14 +27549,14 @@ async function assertSupportedRepository(repositoryRoot) {
 class GitRecoveryService {
   dataDir;
   store;
-  signer;
-  constructor(dataDir, store, signer) {
+  verifier;
+  constructor(dataDir, store, verifier) {
     this.dataDir = dataDir;
     this.store = store;
-    this.signer = signer;
+    this.verifier = verifier;
   }
   async prepare(input) {
-    const requestedRoot = await realpath3(resolve3(input.repositoryRoot));
+    const requestedRoot = await realpath3(resolve4(input.repositoryRoot));
     const repositoryRoot = await realpath3(await runGit(requestedRoot, ["rev-parse", "--show-toplevel"]));
     if (repositoryRoot !== requestedRoot)
       throw new Error(`repositoryRoot must be the Git worktree root: ${repositoryRoot}`);
@@ -27637,7 +27572,7 @@ class GitRecoveryService {
     const artifactDir = join5(this.dataDir, "artifacts", id);
     const payloadRoot = join5(artifactDir, "worktree");
     await copyWorktree(repositoryRoot, payloadRoot);
-    await writeFile4(join5(artifactDir, "index"), original.index, { mode: 384 });
+    await writeFile3(join5(artifactDir, "index"), original.index, { mode: 384 });
     const drillParent = await mkdtemp2(join5(tmpdir2(), "recovery-authority-git-proof-"));
     const drillRepository = join5(drillParent, basename(repositoryRoot));
     try {
@@ -27690,7 +27625,7 @@ class GitRecoveryService {
     const operation = await this.get(operationId);
     if (operation.status !== "proven")
       throw new Error(`Operation is not committable: ${operation.status}`);
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness) {
       throw new Error("Capability is not bound to this Git recovery proof");
     }
@@ -27743,7 +27678,7 @@ class GitRecoveryService {
 var import_pgsql_ast_parser = __toESM(require_pgsql_ast_parser(), 1);
 import { randomUUID as randomUUID3 } from "crypto";
 import { spawn } from "child_process";
-import { mkdir as mkdir6, readFile as readFile7, writeFile as writeFile5 } from "fs/promises";
+import { mkdir as mkdir5, readFile as readFile7, writeFile as writeFile4 } from "fs/promises";
 import { join as join6 } from "path";
 var SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 var DEFAULT_MAX_OUTPUT_BYTES = 512 * 1024 * 1024;
@@ -27795,7 +27730,7 @@ function redact(text, connectionUri) {
   return secrets.reduce((result, secret) => result.replaceAll(secret, "[redacted]"), text);
 }
 async function runCommand(command, args, options) {
-  return await new Promise((resolve4, reject) => {
+  return await new Promise((resolve5, reject) => {
     const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
@@ -27810,7 +27745,7 @@ async function runCommand(command, args, options) {
       if (error2)
         reject(error2);
       else
-        resolve4(result);
+        resolve5(result);
     };
     const exceedLimit = () => {
       child.kill("SIGKILL");
@@ -27926,12 +27861,12 @@ function validatePostgresMutation(sql, schema) {
 class PostgresRecoveryService {
   dataDir;
   store;
-  signer;
+  verifier;
   tools;
-  constructor(dataDir, store, signer, tools = toolsFromEnvironment()) {
+  constructor(dataDir, store, verifier, tools = toolsFromEnvironment()) {
     this.dataDir = dataDir;
     this.store = store;
-    this.signer = signer;
+    this.verifier = verifier;
     this.tools = {
       pgDump: tools.pgDump,
       psql: tools.psql,
@@ -28072,9 +28007,9 @@ THEN 'unsafe' ELSE 'safe' END;`;
       await this.dropDrillDatabase(input.connectionUri, drillDatabase);
     }
     const artifactDir = join6(this.dataDir, "artifacts", id);
-    await mkdir6(artifactDir, { recursive: true, mode: 448 });
+    await mkdir5(artifactDir, { recursive: true, mode: 448 });
     const artifactPath = join6(artifactDir, "before.sql");
-    await writeFile5(artifactPath, snapshot, { mode: 384 });
+    await writeFile4(artifactPath, snapshot, { mode: 384 });
     const artifactDigest = sha256(await readFile7(artifactPath));
     const createdAt = new Date;
     const expiresAt = new Date(createdAt.getTime() + input.ttlSeconds * 1000);
@@ -28127,7 +28062,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
     }
     if (sha256(sql) !== operation.statementDigest)
       throw new Error("SQL does not match the restore-tested statement");
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness || claims.statementDigest !== operation.statementDigest) {
       throw new Error("Capability is not bound to this PostgreSQL recovery proof");
     }
@@ -28189,8 +28124,8 @@ THEN 'unsafe' ELSE 'safe' END;`;
 // src/sqlite.ts
 import { Database } from "bun:sqlite";
 import { randomUUID as randomUUID4 } from "crypto";
-import { chmod as chmod3, lstat as lstat3, mkdir as mkdir7, readFile as readFile8, realpath as realpath4, rename as rename3, rm as rm3, writeFile as writeFile6 } from "fs/promises";
-import { dirname as dirname2, isAbsolute as isAbsolute3, join as join7, relative as relative3, resolve as resolve4, sep as sep3 } from "path";
+import { chmod as chmod3, lstat as lstat3, mkdir as mkdir6, readFile as readFile8, realpath as realpath4, rename as rename3, rm as rm3, writeFile as writeFile5 } from "fs/promises";
+import { dirname as dirname2, isAbsolute as isAbsolute3, join as join7, relative as relative3, resolve as resolve5, sep as sep3 } from "path";
 function assertInside2(root, candidate) {
   const rel = relative3(root, candidate);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute3(rel)) {
@@ -28239,16 +28174,16 @@ function drillMutation(snapshot, sql) {
 class SqliteRecoveryService {
   dataDir;
   store;
-  signer;
-  constructor(dataDir, store, signer) {
+  verifier;
+  constructor(dataDir, store, verifier) {
     this.dataDir = dataDir;
     this.store = store;
-    this.signer = signer;
+    this.verifier = verifier;
   }
   async prepare(input) {
     validateMutation(input.sql);
-    const workspaceRoot = await realpath4(resolve4(input.workspaceRoot));
-    const databasePath = resolve4(workspaceRoot, input.databasePath);
+    const workspaceRoot = await realpath4(resolve5(input.workspaceRoot));
+    const databasePath = resolve5(workspaceRoot, input.databasePath);
     assertInside2(workspaceRoot, databasePath);
     assertWithin2(workspaceRoot, await realpath4(dirname2(databasePath)));
     const stat = await lstat3(databasePath);
@@ -28259,8 +28194,8 @@ class SqliteRecoveryService {
     drillMutation(snapshot, input.sql);
     const id = randomUUID4();
     const artifactDir = join7(this.dataDir, "artifacts", id);
-    await mkdir7(artifactDir, { recursive: true, mode: 448 });
-    await writeFile6(join7(artifactDir, "before.sqlite"), snapshot, { mode: 384 });
+    await mkdir6(artifactDir, { recursive: true, mode: 448 });
+    await writeFile5(join7(artifactDir, "before.sqlite"), snapshot, { mode: 384 });
     const artifactWitness = sha256(await readFile8(join7(artifactDir, "before.sqlite")));
     if (artifactWitness !== stateWitness)
       throw new Error("SQLite recovery artifact failed witness verification");
@@ -28305,7 +28240,7 @@ class SqliteRecoveryService {
     const statementDigest2 = sha256(sql);
     if (statementDigest2 !== operation.statementDigest)
       throw new Error("SQL does not match the restore-tested statement");
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness || claims.statementDigest !== operation.statementDigest) {
       throw new Error("Capability is not bound to this SQLite recovery proof");
     }
@@ -28352,7 +28287,7 @@ class SqliteRecoveryService {
     }
     const mode = (await lstat3(databasePath)).mode;
     const temporaryPath = `${databasePath}.recovery-${operation.id}.tmp`;
-    await writeFile6(temporaryPath, snapshot, { mode: 384 });
+    await writeFile5(temporaryPath, snapshot, { mode: 384 });
     await chmod3(temporaryPath, mode);
     await Promise.all([
       rm3(`${databasePath}-wal`, { force: true }),
@@ -28379,25 +28314,35 @@ class SqliteRecoveryService {
 }
 
 // src/server.ts
-var dataDir = resolve5(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
-var pluginRoot = resolve5(process.env.PLUGIN_ROOT ?? ".");
+var dataDir = resolve6(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+var keyDir = authorityKeyDir(dataDir);
+var authorityWorkspaceRoot = process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT ? await realpath5(resolve6(process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT)) : null;
+var pluginRoot = resolve6(process.env.PLUGIN_ROOT ?? ".");
 var store = new OperationStore(dataDir);
-var signer = await CapabilitySigner.load(dataDir);
-var approvals = new ApprovalBroker(dataDir, store, signer);
-var filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
-var gitService = new GitRecoveryService(dataDir, store, signer);
-var postgresService = new PostgresRecoveryService(dataDir, store, signer);
-var sqliteService = new SqliteRecoveryService(dataDir, store, signer);
+var verifier = await PublicCapabilityVerifier.load(dataDir);
+var approvals = new AuthorizationRegistry(dataDir, store, verifier);
+var filesystemService = new FilesystemRecoveryService(dataDir, store, verifier);
+var gitService = new GitRecoveryService(dataDir, store, verifier);
+var postgresService = new PostgresRecoveryService(dataDir, store, verifier);
+var sqliteService = new SqliteRecoveryService(dataDir, store, verifier);
 function shellQuote(value2) {
   return `'${value2.replaceAll("'", `'"'"'`)}'`;
+}
+async function assertAuthorityWorkspace(requestedRoot) {
+  if (!authorityWorkspaceRoot)
+    return;
+  const requested = await realpath5(resolve6(requestedRoot));
+  if (requested !== authorityWorkspaceRoot) {
+    throw new Error(`Recovery scope must equal the sandbox workspace: ${authorityWorkspaceRoot}`);
+  }
 }
 function authorizationView(authorization) {
   return {
     ...authorization,
-    approvalCommand: authorization.status === "pending" ? `bash ${shellQuote(resolve5(pluginRoot, "scripts", "approve-operation.sh"))} ${authorization.operationId} --data-dir ${shellQuote(dataDir)}` : null
+    approvalCommand: authorization.status === "pending" ? `bash ${shellQuote(resolve6(pluginRoot, "scripts", "approve-operation.sh"))} ${authorization.operationId} --data-dir ${shellQuote(dataDir)} --key-dir ${shellQuote(keyDir)}` : null
   };
 }
-var server = new McpServer({ name: "recovery-authority", version: "0.7.0" }, {
+var server = new McpServer({ name: "recovery-authority", version: "0.8.0" }, {
   instructions: "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Hook coverage applies only when the bundled hook is trusted."
 });
 server.registerTool("recovery_inspect_runtime", {
@@ -28413,7 +28358,15 @@ server.registerTool("recovery_inspect_runtime", {
       accountRootIsNotDerivedFromHomeOnPosix: process.platform === "win32" || !["windows-environment", "unresolved"].includes(identity.accountHomeSource),
       authorityDataOutsideMutableHomeRequired: true,
       destructiveEffectsAreActorIndependent: true,
-      nativeSubagentIdentityAvailableOnlyInLifecycleHooks: true
+      nativeSubagentIdentityAvailableOnlyInLifecycleHooks: true,
+      privateSigningKeyLoadedByMcp: false,
+      authorityServerOutsideAgentSandbox: Boolean(process.env.RECOVERY_AUTHORITY_SANDBOX_HOST)
+    },
+    executionBoundary: {
+      sandboxActive: process.env.RECOVERY_AUTHORITY_SANDBOX_HOST === "1",
+      authorityTransport: process.env.RECOVERY_AUTHORITY_SANDBOX_HOST === "1" ? "unix-socket" : "stdio",
+      signingKeyDirectory: keyDir,
+      workspaceRoot: authorityWorkspaceRoot
     }
   };
   return {
@@ -28427,7 +28380,9 @@ server.registerTool("recovery_prepare_filesystem_delete", {
   inputSchema: PrepareFilesystemDeleteInput.shape,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
 }, async (input) => {
-  const prepared = await filesystemService.prepare(PrepareFilesystemDeleteInput.parse(input));
+  const parsed = PrepareFilesystemDeleteInput.parse(input);
+  await assertAuthorityWorkspace(parsed.workspaceRoot);
+  const prepared = await filesystemService.prepare(parsed);
   const result = {
     operation: prepared.operation,
     authorization: authorizationView(await approvals.request(prepared.operation))
@@ -28470,7 +28425,9 @@ server.registerTool("recovery_prepare_git_reset_hard", {
   inputSchema: PrepareGitResetHardInput.shape,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
 }, async (input) => {
-  const prepared = await gitService.prepare(PrepareGitResetHardInput.parse(input));
+  const parsed = PrepareGitResetHardInput.parse(input);
+  await assertAuthorityWorkspace(parsed.repositoryRoot);
+  const prepared = await gitService.prepare(parsed);
   const result = {
     operation: prepared.operation,
     authorization: authorizationView(await approvals.request(prepared.operation))
@@ -28513,7 +28470,9 @@ server.registerTool("recovery_prepare_sqlite_mutation", {
   inputSchema: PrepareSqliteMutationInput.shape,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
 }, async (input) => {
-  const prepared = await sqliteService.prepare(PrepareSqliteMutationInput.parse(input));
+  const parsed = PrepareSqliteMutationInput.parse(input);
+  await assertAuthorityWorkspace(parsed.workspaceRoot);
+  const prepared = await sqliteService.prepare(parsed);
   const result = {
     operation: prepared.operation,
     authorization: authorizationView(await approvals.request(prepared.operation))

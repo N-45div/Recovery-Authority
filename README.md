@@ -5,9 +5,14 @@ Recovery Authority is a Codex plugin that requires a demonstrated inverse capabi
 Instead of asking only whether an agent is allowed to run a command, it asks whether the exact affected state has already been restored successfully. The resulting proof, scope, expected post-state, human approval, and expiry are bound into a short-lived signed capability.
 
 ```text
-agent intent -> effect interception -> recovery artifact -> isolated restore drill
-             -> pending human approval -> signed capability -> guarded commit
-             -> evidence receipt -> exact restore when requested
+agent + descendants (read-only host, writable repo)
+        | typed MCP over a mounted Unix socket
+        v
+authority daemon (outside sandbox, public-key verification only)
+        | prepare -> recovery artifact -> isolated restore drill
+        | pending approval <- separate human terminal + private signing key
+        v
+proof-bound capability -> guarded commit -> receipt -> exact restore
 ```
 
 ## Run the complete demo
@@ -39,11 +44,32 @@ The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash c
 
 The same plugin registers native subagent lifecycle hooks. Each delegated executor is logged with the parent session, agent ID, type, permission mode, model, turn, and lifecycle state, then surfaced in the TUI. Enforcement remains actor-independent because Codex does not include `agent_id` in every turn-scoped tool hook. See the [threat model](docs/THREAT_MODEL.md) for the exact trust boundaries and evidence corpus.
 
-## Current boundary
+## Enforceable Linux boundary
+
+The recommended mode launches the coding harness inside `bubblewrap` and keeps the typed MCP authority server outside that mount namespace:
+
+```bash
+mkdir -p "$HOME/.local/share/recovery-authority/project-data"
+mkdir -p "$HOME/.local/share/recovery-authority/project-keys"
+
+bun run sandbox \
+  --workspace "$PWD" \
+  --data-dir "$HOME/.local/share/recovery-authority/project-data" \
+  --key-dir "$HOME/.local/share/recovery-authority/project-keys" \
+  -- codex
+```
+
+The two authority directories must be outside and disjoint from the workspace. The runner makes the host root read-only, binds only the selected workspace writable, masks both authority directories, drops capabilities, disables nested user namespaces, and creates PID, IPC, UTS, cgroup, and user namespaces where supported. Parent agents, native subagents, shell-launched agents, scripts, and package hooks inherit the same boundary. Filesystem, SQLite, and Git recovery tools are cryptographically hosted outside the sandbox but refuse any root other than the canonical selected workspace. Network access remains available for model APIs; add `--isolate-network` for offline work.
+
+For direct `codex` launches, the runner automatically stages a disposable writable `CODEX_HOME`. Authentication and configuration files are copied into that temporary root; large packages, plugins, skills, rules, memories, and cache trees are read-only references. The temporary state is removed when the session exits, while the real home remains read-only.
+
+Inside the sandbox, `scripts/start-mcp.sh` becomes a stdio-to-Unix-socket proxy. Only the host authority daemon and terminal approver can write authority state; model-controlled processes cannot mount it. A second narrow socket relays sanitized hook receipts so the TUI keeps parent and subagent history without exposing the ledger. The MCP bundle contains only public verification code; the private Ed25519 key and issuer implementation live in the separate terminal approval path. Existing installations migrate a legacy private key out of the data directory without changing its public identity.
+
+## Current coverage
 
 After the user trusts the plugin hook, recognized destructive Bash and native patch calls are blocked before execution. Exact recovery is available for `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`. Root overrides, sync deletion, container purge, remote-storage deletion, shell-launched agents, filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
-The human approval gate is a control boundary for coding agents using the trusted hook and MCP server. It is not an operating-system sandbox against arbitrary malicious code already running as the same user. Approval records and signing material are mode-restricted local files; production multi-user deployment should move signing into an OS keychain, hardware authenticator, or remote policy service.
+Without `bun run sandbox`, the hook and approval gate remain a harness-level control and cannot mediate arbitrary same-user binaries. In the recommended Linux mode, the operating-system boundary protects host files and authority state even when full-access mode is selected inside the nested harness. The writable repository is intentionally still editable; recognized destructive repository effects are governed by the hook and proof-bound MCP commit tools.
 
 On POSIX, runtime inspection resolves the account home from the process UID through the passwd/NSS identity interfaces rather than trusting `$HOME`. Filesystem preparation refuses any target containing that account root or the authority data directory. Run `recovery_inspect_runtime` before destructive work to surface root drift and deployment warnings.
 
@@ -58,6 +84,7 @@ PostgreSQL recovery accepts one parsed `DELETE`, `UPDATE`, `TRUNCATE`, `DROP TAB
 - macOS or Linux
 - Bun 1.3+
 - Rust 1.89+ for the optional TUI
+- Linux `bubblewrap` for the enforceable parent/subagent sandbox
 - PostgreSQL `pg_dump` and `psql` compatible with the protected server when using the PostgreSQL adapter
 
 ## Setup
@@ -70,6 +97,8 @@ codex plugin add recovery-authority@recovery-authority
 ```
 
 Start a new Codex session, open `/hooks`, and trust the bundled Recovery Authority hook. Codex deliberately skips untrusted plugin hooks.
+
+For the enforceable Linux mode, launch that session through `bun run sandbox` as shown above. The command can wrap another harness by replacing `codex`; use `--stage-codex-home` when Codex is launched indirectly through a shell script.
 
 When a prepare tool succeeds, show the returned `approvalCommand` to the user. The user runs it in a separate terminal and types the displayed 12-character proof prefix. The agent then calls `recovery_get_authorization` and can commit only with the returned approved capability.
 
@@ -89,10 +118,12 @@ The repository root is the Codex plugin. Its manifest is `.codex-plugin/plugin.j
 
 ```bash
 bun test
+RECOVERY_SANDBOX_INTEGRATION=1 bun test tests/sandbox.integration.test.ts
 RECOVERY_POSTGRES_INTEGRATION=1 bun test tests/postgres.integration.test.ts
 bun run demo
 bun run test:hook
 bun run test:mcp
+bun run test:bundle
 bun run check
 bun run build
 cargo test --workspace

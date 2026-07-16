@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { FileRecord, FilesystemRecoveryOperation, PrepareFilesystemDelete } from "./contracts.js";
-import { CapabilitySigner, sha256 } from "./crypto.js";
+import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
 import { assertTargetExcludesProtectedRoots, inspectRuntimeIdentity } from "./identity.js";
 
@@ -92,7 +92,7 @@ export class FilesystemRecoveryService {
   constructor(
     private readonly dataDir: string,
     private readonly store: OperationStore,
-    private readonly signer: CapabilitySigner,
+    private readonly verifier: CapabilityVerifier,
   ) {}
 
   async prepare(input: PrepareFilesystemDelete): Promise<{ operation: FilesystemRecoveryOperation }> {
@@ -164,7 +164,7 @@ export class FilesystemRecoveryService {
     const operation = await this.store.get(operationId);
     if (operation.kind !== "filesystem.delete") throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
     if (operation.status !== "proven") throw new Error(`Operation is not committable: ${operation.status}`);
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (
       claims.operationId !== operation.id ||
       claims.kind !== operation.kind ||
@@ -211,6 +211,6 @@ export class FilesystemRecoveryService {
 
 export async function createFilesystemRecoveryService(dataDir: string): Promise<FilesystemRecoveryService> {
   const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new FilesystemRecoveryService(dataDir, store, signer);
+  const verifier = await PublicCapabilityVerifier.load(dataDir);
+  return new FilesystemRecoveryService(dataDir, store, verifier);
 }

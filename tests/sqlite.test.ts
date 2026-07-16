@@ -3,14 +3,20 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSqliteRecoveryService } from "../src/sqlite.js";
+import { createSqliteRecoveryService as createUninitializedSqliteService } from "../src/sqlite.js";
+import { initializeAuthority } from "../src/signer.js";
 import { authorizeOperation } from "./authorize.js";
 
 const temporaryRoots: string[] = [];
 
+async function createSqliteRecoveryService(dataDir: string) {
+  await initializeAuthority(dataDir);
+  return createUninitializedSqliteService(dataDir);
+}
+
 async function temporaryRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
-  temporaryRoots.push(root);
+  temporaryRoots.push(root, `${root}.keys`);
   return root;
 }
 

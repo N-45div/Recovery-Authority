@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { PrepareSqliteMutation, SqliteRecoveryOperation } from "./contracts.js";
-import { CapabilitySigner, sha256 } from "./crypto.js";
+import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
 
 function assertInside(root: string, candidate: string): void {
@@ -60,7 +60,7 @@ export class SqliteRecoveryService {
   constructor(
     private readonly dataDir: string,
     private readonly store: OperationStore,
-    private readonly signer: CapabilitySigner,
+    private readonly verifier: CapabilityVerifier,
   ) {}
 
   async prepare(input: PrepareSqliteMutation): Promise<{ operation: SqliteRecoveryOperation }> {
@@ -124,7 +124,7 @@ export class SqliteRecoveryService {
     if (operation.status !== "proven") throw new Error(`Operation is not committable: ${operation.status}`);
     const statementDigest = sha256(sql);
     if (statementDigest !== operation.statementDigest) throw new Error("SQL does not match the restore-tested statement");
-    const claims = this.signer.verify(capability);
+    const claims = this.verifier.verify(capability);
     if (
       claims.operationId !== operation.id ||
       claims.kind !== operation.kind ||
@@ -210,6 +210,6 @@ export class SqliteRecoveryService {
 
 export async function createSqliteRecoveryService(dataDir: string): Promise<SqliteRecoveryService> {
   const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new SqliteRecoveryService(dataDir, store, signer);
+  const verifier = await PublicCapabilityVerifier.load(dataDir);
+  return new SqliteRecoveryService(dataDir, store, verifier);
 }
