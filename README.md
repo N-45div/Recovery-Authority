@@ -171,14 +171,22 @@ Additional requirements:
 
 ## Installation
 
-The committed `dist/` artifacts let judges install and run the plugin without rebuilding. From the repository root:
+The committed `dist/` artifacts let judges install and run the plugin without rebuilding or cloning the repository manually:
 
 ```bash
-codex plugin marketplace add .
+codex plugin marketplace add N-45div/Recovery-Authority --ref main
 codex plugin add recovery-authority@recovery-authority
 ```
 
-Start a new Codex session, open `/hooks`, and trust the bundled Recovery Authority hook. Codex deliberately skips untrusted plugin hooks.
+Start a new Codex session after installation. To refresh an existing installation after a release:
+
+```bash
+codex plugin marketplace upgrade recovery-authority
+codex plugin remove recovery-authority@recovery-authority
+codex plugin add recovery-authority@recovery-authority
+```
+
+Open `/hooks` and trust the bundled Recovery Authority hook. Codex deliberately skips untrusted plugin hooks.
 
 For the enforceable Linux mode, launch that session through `bun run sandbox` as shown above. The command can wrap another harness by replacing `codex`; use `--stage-codex-home` when Codex is launched indirectly through a shell script.
 
@@ -194,7 +202,7 @@ cargo build --release -p recovery-authority
 
 The PostgreSQL adapter defaults to `pg_dump` and `psql` on `PATH`. Override them for a managed installation or container wrapper with `RECOVERY_AUTHORITY_PG_DUMP` and `RECOVERY_AUTHORITY_PSQL`. `RECOVERY_AUTHORITY_MAX_DUMP_BYTES` defaults to 512 MiB, and `RECOVERY_AUTHORITY_POSTGRES_TIMEOUT_MS` defaults to 120 seconds.
 
-The repository root is the Codex plugin. Its manifest is `.codex-plugin/plugin.json`, and `.mcp.json` launches the bundled stdio MCP server.
+For local development, replace the GitHub marketplace source with `codex plugin marketplace add .` from the repository root. The repository root is the Codex plugin, its manifest is `.codex-plugin/plugin.json`, and `.mcp.json` launches the bundled stdio MCP server.
 
 ## Development
 
