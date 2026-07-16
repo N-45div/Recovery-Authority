@@ -11,9 +11,11 @@ The first working adapter protects scoped filesystem deletes:
 5. Recheck the live state before deletion.
 6. Restore and verify the original state on request.
 
+The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers.
+
 ## Current boundary
 
-Only operations executed through the Recovery Authority MCP tools are protected. The plugin does not claim to intercept arbitrary shell commands, Git operations, database mutations, or external API calls yet.
+After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is currently available only for `filesystem.delete`; filesystem overwrites, destructive Git/database/infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
 ## Requirements
 
@@ -29,6 +31,8 @@ Install the repository as a local Codex marketplace and add the plugin:
 codex plugin marketplace add .
 codex plugin add recovery-authority@recovery-authority
 ```
+
+Start a new Codex session, open `/hooks`, and trust the bundled Recovery Authority hook. Codex deliberately skips untrusted plugin hooks.
 
 The bundled `dist/server.js` lets Codex launch the MCP server without rebuilding it. To rebuild from source or develop locally:
 
@@ -53,8 +57,10 @@ cargo test --workspace
 Run the local TUI against a plugin data directory:
 
 ```bash
-cargo run -p recovery-authority -- tui --operations .recovery-authority/operations.json
+cargo run -p recovery-authority -- tui --data-dir .recovery-authority
 ```
+
+Navigate with left/right or `1`-`5`. The views show mission status, intercepted effects, recovery operations, adapter coverage, and proof receipts.
 
 ## MCP tools
 
@@ -62,6 +68,10 @@ cargo run -p recovery-authority -- tui --operations .recovery-authority/operatio
 - `recovery_commit_filesystem_delete`
 - `recovery_restore_filesystem_delete`
 - `recovery_get_operation`
+
+## Shell policy
+
+The hook currently detects destructive filesystem commands, destructive Git operations, destructive SQL passed to common database clients, Terraform/Kubernetes/cloud deletion commands, and opaque shell-script execution. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command.
 
 ## OpenAI Build Week
 
