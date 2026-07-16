@@ -26,6 +26,16 @@ function runBun(source) {
   return result.stdout.trim();
 }
 
+function runGit(args) {
+  const result = spawnSync("git", args, {
+    cwd: workspace,
+    encoding: "utf8",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
 runBun(`
   import { Database } from "bun:sqlite";
   const db = new Database(process.env.DATABASE_PATH);
@@ -53,11 +63,14 @@ try {
     tools.tools.map((tool) => tool.name).sort(),
     [
       "recovery_commit_filesystem_delete",
+      "recovery_commit_git_reset_hard",
       "recovery_commit_sqlite_mutation",
       "recovery_get_operation",
       "recovery_prepare_filesystem_delete",
+      "recovery_prepare_git_reset_hard",
       "recovery_prepare_sqlite_mutation",
       "recovery_restore_filesystem_delete",
+      "recovery_restore_git_reset_hard",
       "recovery_restore_sqlite_mutation",
     ],
   );
@@ -67,6 +80,10 @@ try {
   );
   assert.equal(
     tools.tools.find((tool) => tool.name === "recovery_commit_sqlite_mutation").annotations.destructiveHint,
+    true,
+  );
+  assert.equal(
+    tools.tools.find((tool) => tool.name === "recovery_commit_git_reset_hard").annotations.destructiveHint,
     true,
   );
 
@@ -139,6 +156,35 @@ try {
     `),
     '[{"name":"Ada"},{"name":"Grace"}]',
   );
+
+  runGit(["init", "-b", "main"]);
+  runGit(["config", "user.name", "Recovery Smoke"]);
+  runGit(["config", "user.email", "recovery@example.test"]);
+  runGit(["add", "."]);
+  runGit(["commit", "-m", "baseline"]);
+  await writeFile(join(workspace, "state.txt"), "git recovery state");
+  const gitPrepared = await client.callTool({
+    name: "recovery_prepare_git_reset_hard",
+    arguments: {
+      repositoryRoot: workspace,
+      target: "HEAD",
+      reason: "Exercise Git recovery over MCP",
+      ttlSeconds: 300,
+    },
+  });
+  await client.callTool({
+    name: "recovery_commit_git_reset_hard",
+    arguments: {
+      operationId: gitPrepared.structuredContent.operation.id,
+      capability: gitPrepared.structuredContent.capability,
+    },
+  });
+  assert.equal(await readFile(join(workspace, "state.txt"), "utf8"), "recover me");
+  await client.callTool({
+    name: "recovery_restore_git_reset_hard",
+    arguments: { operationId: gitPrepared.structuredContent.operation.id },
+  });
+  assert.equal(await readFile(join(workspace, "state.txt"), "utf8"), "git recovery state");
   process.stdout.write("MCP smoke test passed\n");
 } finally {
   await client.close();

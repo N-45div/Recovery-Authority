@@ -19595,7 +19595,7 @@ class StdioServerTransport {
 }
 
 // src/server.ts
-import { resolve as resolve3 } from "path";
+import { resolve as resolve4 } from "path";
 
 // src/contracts.ts
 var PrepareFilesystemDeleteInput = exports_external.object({
@@ -19620,6 +19620,15 @@ var PrepareSqliteMutationInput = exports_external.object({
 var CommitSqliteMutationInput = OperationInput.extend({
   capability: exports_external.string().min(1),
   sql: exports_external.string().min(1).max(1e5)
+});
+var PrepareGitResetHardInput = exports_external.object({
+  repositoryRoot: exports_external.string().min(1).describe("Absolute path to the Git worktree root"),
+  target: exports_external.string().min(1).max(500).default("HEAD").describe("Commit-ish passed to git reset --hard"),
+  reason: exports_external.string().min(1).max(500),
+  ttlSeconds: exports_external.number().int().min(30).max(900).default(300)
+});
+var CommitGitResetHardInput = OperationInput.extend({
+  capability: exports_external.string().min(1)
 });
 var FileRecord = exports_external.object({
   path: exports_external.string(),
@@ -19654,9 +19663,21 @@ var SqliteRecoveryOperation = RecoveryOperationBase.extend({
   integrityCheck: exports_external.literal("ok"),
   postCommitWitness: exports_external.string().nullable()
 });
+var GitResetHardRecoveryOperation = RecoveryOperationBase.extend({
+  kind: exports_external.literal("git.reset-hard"),
+  repositoryRoot: exports_external.string(),
+  targetCommit: exports_external.string(),
+  originalHead: exports_external.string(),
+  originalHeadRef: exports_external.string().nullable(),
+  records: exports_external.array(FileRecord),
+  indexDigest: exports_external.string(),
+  indexMode: exports_external.number().int(),
+  postCommitWitness: exports_external.string().nullable()
+});
 var RecoveryOperation = exports_external.discriminatedUnion("kind", [
   FilesystemRecoveryOperation,
-  SqliteRecoveryOperation
+  SqliteRecoveryOperation,
+  GitResetHardRecoveryOperation
 ]);
 
 // src/crypto.ts
@@ -19671,7 +19692,7 @@ function base64url2(value) {
 }
 var CapabilityClaims = exports_external.object({
   operationId: exports_external.string().uuid(),
-  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate"]),
+  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard"]),
   proofDigest: exports_external.string(),
   stateWitness: exports_external.string(),
   statementDigest: exports_external.string().nullable().default(null),
@@ -19837,7 +19858,7 @@ async function collectRecords(root, absolutePath) {
   const nested = await Promise.all(children.sort().map((child) => collectRecords(root, join3(absolutePath, child))));
   return [{ path, kind: "directory", mode: stat.mode, sha256: null, symlinkTarget: null }, ...nested.flat()];
 }
-function witness(records) {
+function recordsWitness(records) {
   return sha256(JSON.stringify([...records].sort((a, b) => a.path.localeCompare(b.path))));
 }
 async function restoreRecords(payloadRoot, destinationRoot, records) {
@@ -19855,6 +19876,9 @@ async function restoreRecords(payloadRoot, destinationRoot, records) {
       await cp(join3(payloadRoot, record3.path), destination, { preserveTimestamps: true });
       await chmod(destination, record3.mode);
     }
+  }
+  for (const record3 of records.filter((item) => item.kind === "directory").sort((a, b) => b.path.length - a.path.length)) {
+    await chmod(join3(destinationRoot, record3.path), record3.mode);
   }
 }
 
@@ -19878,7 +19902,7 @@ class FilesystemRecoveryService {
     }
     const normalizedPaths = absolutePaths.map((path) => relative(workspaceRoot, path));
     const records = (await Promise.all(absolutePaths.map((path) => collectRecords(workspaceRoot, path)))).flat();
-    const stateWitness = witness(records);
+    const stateWitness = recordsWitness(records);
     const id = randomUUID();
     const artifactDir = join3(this.dataDir, "artifacts", id);
     const payloadRoot = join3(artifactDir, "payload");
@@ -19892,7 +19916,7 @@ class FilesystemRecoveryService {
     try {
       await restoreRecords(payloadRoot, restoreRoot, records);
       const restoredRecords = (await Promise.all(normalizedPaths.map((path) => collectRecords(restoreRoot, join3(restoreRoot, path))))).flat();
-      if (witness(restoredRecords) !== stateWitness)
+      if (recordsWitness(restoredRecords) !== stateWitness)
         throw new Error("Restore drill produced a different state witness");
     } finally {
       await rm(restoreRoot, { recursive: true, force: true });
@@ -19941,7 +19965,7 @@ class FilesystemRecoveryService {
       throw new Error("Capability is not bound to this recovery proof");
     }
     const currentRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join3(operation.workspaceRoot, path))))).flat();
-    if (witness(currentRecords) !== operation.stateWitness)
+    if (recordsWitness(currentRecords) !== operation.stateWitness)
       throw new Error("Protected state changed after the recovery proof was issued");
     for (const path of [...operation.paths].sort((a, b) => b.length - a.length)) {
       await rm(join3(operation.workspaceRoot, path), { recursive: true, force: false });
@@ -19963,7 +19987,7 @@ class FilesystemRecoveryService {
     }
     await restoreRecords(join3(operation.artifactDir, "payload"), operation.workspaceRoot, operation.records);
     const restoredRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join3(operation.workspaceRoot, path))))).flat();
-    if (witness(restoredRecords) !== operation.stateWitness)
+    if (recordsWitness(restoredRecords) !== operation.stateWitness)
       throw new Error("Recovery completed but invariant verification failed");
     const recovered = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
     await this.store.put(recovered);
@@ -19977,11 +20001,255 @@ class FilesystemRecoveryService {
   }
 }
 
+// src/git.ts
+import { execFile } from "child_process";
+import { randomUUID as randomUUID2 } from "crypto";
+import { chmod as chmod2, cp as cp2, lstat as lstat2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile4, readdir, realpath as realpath2, rm as rm2, writeFile as writeFile3 } from "fs/promises";
+import { tmpdir as tmpdir2 } from "os";
+import { basename, join as join4, resolve as resolve2 } from "path";
+function runGit(cwd, args) {
+  return new Promise((resolvePromise, reject) => {
+    execFile("git", args, {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
+    }, (error2, stdout, stderr) => {
+      if (error2) {
+        reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim() || error2.message}`));
+        return;
+      }
+      resolvePromise(stdout.trim());
+    });
+  });
+}
+async function pathExists2(path) {
+  try {
+    await lstat2(path);
+    return true;
+  } catch (error2) {
+    if (error2.code === "ENOENT")
+      return false;
+    throw error2;
+  }
+}
+async function gitPath(repositoryRoot, name) {
+  const path = await runGit(repositoryRoot, ["rev-parse", "--git-path", name]);
+  return resolve2(repositoryRoot, path);
+}
+async function collectWorktreeRecords(repositoryRoot) {
+  const entries = (await readdir(repositoryRoot)).filter((entry) => entry !== ".git").sort();
+  return (await Promise.all(entries.map((entry) => collectRecords(repositoryRoot, join4(repositoryRoot, entry))))).flat();
+}
+async function copyWorktree(repositoryRoot, payloadRoot) {
+  await mkdir4(payloadRoot, { recursive: true, mode: 448 });
+  for (const entry of (await readdir(repositoryRoot)).filter((item) => item !== ".git")) {
+    await cp2(join4(repositoryRoot, entry), join4(payloadRoot, entry), {
+      recursive: true,
+      dereference: false,
+      preserveTimestamps: true
+    });
+  }
+}
+async function clearWorktree(repositoryRoot) {
+  for (const entry of (await readdir(repositoryRoot)).filter((item) => item !== ".git")) {
+    await rm2(join4(repositoryRoot, entry), { recursive: true, force: true });
+  }
+}
+async function readGitState(repositoryRoot) {
+  const [records, head, symbolicRef, indexPath] = await Promise.all([
+    collectWorktreeRecords(repositoryRoot),
+    runGit(repositoryRoot, ["rev-parse", "HEAD"]),
+    runGit(repositoryRoot, ["symbolic-ref", "-q", "HEAD"]).catch(() => ""),
+    gitPath(repositoryRoot, "index")
+  ]);
+  const [index, indexStat] = await Promise.all([readFile4(indexPath), lstat2(indexPath)]);
+  const indexDigest = sha256(index);
+  const headRef = symbolicRef || null;
+  const witness = sha256(JSON.stringify({
+    records: recordsWitness(records),
+    head,
+    headRef,
+    indexDigest,
+    indexMode: indexStat.mode
+  }));
+  return { records, head, headRef, index, indexDigest, indexMode: indexStat.mode, witness };
+}
+async function restoreGitState(repositoryRoot, payloadRoot, originalHead, index, indexMode) {
+  await runGit(repositoryRoot, ["reset", "--hard", originalHead]);
+  await clearWorktree(repositoryRoot);
+  const records = await collectWorktreeRecords(payloadRoot);
+  await restoreRecords(payloadRoot, repositoryRoot, records);
+  const indexPath = await gitPath(repositoryRoot, "index");
+  await writeFile3(indexPath, index, { mode: 384 });
+  await chmod2(indexPath, indexMode);
+}
+async function assertSupportedRepository(repositoryRoot) {
+  const dotGit = await lstat2(join4(repositoryRoot, ".git"));
+  if (!dotGit.isDirectory() || dotGit.isSymbolicLink()) {
+    throw new Error("Git reset recovery does not yet support linked worktrees or redirected .git paths");
+  }
+  const bare = await runGit(repositoryRoot, ["rev-parse", "--is-bare-repository"]);
+  if (bare !== "false")
+    throw new Error("Git reset recovery requires a non-bare worktree");
+  const configNames = (await runGit(repositoryRoot, ["config", "--name-only", "--list"])).split(`
+`).map((name) => name.toLowerCase());
+  if (configNames.some((name) => ["core.worktree", "core.hookspath", "core.fsmonitor"].includes(name) || /^filter\..*\.(clean|smudge|process)$/.test(name))) {
+    throw new Error("Git reset recovery refuses custom worktree, hook, fsmonitor, or content-filter configuration");
+  }
+  const submodules = await runGit(repositoryRoot, ["submodule", "status", "--recursive"]);
+  if (submodules)
+    throw new Error("Git reset recovery does not yet support repositories with submodules");
+  for (const marker of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply"]) {
+    if (await pathExists2(await gitPath(repositoryRoot, marker))) {
+      throw new Error(`Git reset recovery refuses repositories with an in-progress operation: ${marker}`);
+    }
+  }
+}
+
+class GitRecoveryService {
+  dataDir;
+  store;
+  signer;
+  constructor(dataDir, store, signer) {
+    this.dataDir = dataDir;
+    this.store = store;
+    this.signer = signer;
+  }
+  async prepare(input) {
+    const requestedRoot = await realpath2(resolve2(input.repositoryRoot));
+    const repositoryRoot = await realpath2(await runGit(requestedRoot, ["rev-parse", "--show-toplevel"]));
+    if (repositoryRoot !== requestedRoot)
+      throw new Error(`repositoryRoot must be the Git worktree root: ${repositoryRoot}`);
+    await assertSupportedRepository(repositoryRoot);
+    const targetCommit = await runGit(repositoryRoot, [
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${input.target}^{commit}`
+    ]);
+    const original = await readGitState(repositoryRoot);
+    const id = randomUUID2();
+    const artifactDir = join4(this.dataDir, "artifacts", id);
+    const payloadRoot = join4(artifactDir, "worktree");
+    await copyWorktree(repositoryRoot, payloadRoot);
+    await writeFile3(join4(artifactDir, "index"), original.index, { mode: 384 });
+    const drillParent = await mkdtemp2(join4(tmpdir2(), "recovery-authority-git-proof-"));
+    const drillRepository = join4(drillParent, basename(repositoryRoot));
+    try {
+      await cp2(repositoryRoot, drillRepository, { recursive: true, dereference: false, preserveTimestamps: true });
+      await runGit(drillRepository, ["reset", "--hard", targetCommit]);
+      await restoreGitState(drillRepository, payloadRoot, original.head, original.index, original.indexMode);
+      const restored = await readGitState(drillRepository);
+      if (restored.witness !== original.witness)
+        throw new Error("Git restore drill produced a different state witness");
+    } finally {
+      await rm2(drillParent, { recursive: true, force: true });
+    }
+    const createdAt = new Date;
+    const expiresAt = new Date(createdAt.getTime() + input.ttlSeconds * 1000);
+    const proofDigest = sha256(JSON.stringify({
+      id,
+      kind: "git.reset-hard",
+      stateWitness: original.witness,
+      targetCommit,
+      createdAt: createdAt.toISOString()
+    }));
+    const operation = {
+      id,
+      kind: "git.reset-hard",
+      status: "proven",
+      workspaceRoot: repositoryRoot,
+      repositoryRoot,
+      paths: ["."],
+      reason: input.reason,
+      artifactDir,
+      records: original.records,
+      stateWitness: original.witness,
+      proofDigest,
+      targetCommit,
+      originalHead: original.head,
+      originalHeadRef: original.headRef,
+      indexDigest: original.indexDigest,
+      indexMode: original.indexMode,
+      postCommitWitness: null,
+      createdAt: createdAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      committedAt: null,
+      recoveredAt: null,
+      failure: null
+    };
+    await this.store.put(operation);
+    return {
+      operation,
+      capability: this.signer.issue({
+        operationId: id,
+        kind: operation.kind,
+        proofDigest,
+        stateWitness: operation.stateWitness,
+        statementDigest: null,
+        expiresAt: operation.expiresAt
+      })
+    };
+  }
+  async commit(operationId, capability) {
+    const operation = await this.get(operationId);
+    if (operation.status !== "proven")
+      throw new Error(`Operation is not committable: ${operation.status}`);
+    const claims = this.signer.verify(capability);
+    if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness) {
+      throw new Error("Capability is not bound to this Git recovery proof");
+    }
+    if ((await readGitState(operation.repositoryRoot)).witness !== operation.stateWitness) {
+      throw new Error("Protected Git state changed after the recovery proof was issued");
+    }
+    await runGit(operation.repositoryRoot, ["reset", "--hard", operation.targetCommit]);
+    const postCommitWitness = (await readGitState(operation.repositoryRoot)).witness;
+    const committed = {
+      ...operation,
+      status: "committed",
+      postCommitWitness,
+      committedAt: new Date().toISOString()
+    };
+    await this.store.put(committed);
+    return committed;
+  }
+  async recover(operationId) {
+    const operation = await this.get(operationId);
+    if (operation.status !== "committed" || !operation.postCommitWitness) {
+      throw new Error(`Operation is not recoverable from status: ${operation.status}`);
+    }
+    if ((await readGitState(operation.repositoryRoot)).witness !== operation.postCommitWitness) {
+      throw new Error("Git recovery would overwrite state changed after the authorized reset");
+    }
+    const index = await readFile4(join4(operation.artifactDir, "index"));
+    if (sha256(index) !== operation.indexDigest)
+      throw new Error("Git index recovery artifact witness is invalid");
+    await restoreGitState(operation.repositoryRoot, join4(operation.artifactDir, "worktree"), operation.originalHead, index, operation.indexMode);
+    if ((await readGitState(operation.repositoryRoot)).witness !== operation.stateWitness) {
+      throw new Error("Git recovery completed but witness verification failed");
+    }
+    const recovered = {
+      ...operation,
+      status: "recovered",
+      recoveredAt: new Date().toISOString()
+    };
+    await this.store.put(recovered);
+    return recovered;
+  }
+  async get(operationId) {
+    const operation = await this.store.get(operationId);
+    if (operation.kind !== "git.reset-hard")
+      throw new Error(`Operation is not a Git reset: ${operation.kind}`);
+    return operation;
+  }
+}
+
 // src/sqlite.ts
 import { Database } from "bun:sqlite";
-import { randomUUID as randomUUID2 } from "crypto";
-import { chmod as chmod2, lstat as lstat2, mkdir as mkdir4, readFile as readFile4, realpath as realpath2, rename as rename2, rm as rm2, writeFile as writeFile3 } from "fs/promises";
-import { dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+import { randomUUID as randomUUID3 } from "crypto";
+import { chmod as chmod3, lstat as lstat3, mkdir as mkdir5, readFile as readFile5, realpath as realpath3, rename as rename2, rm as rm3, writeFile as writeFile4 } from "fs/promises";
+import { dirname as dirname2, isAbsolute as isAbsolute2, join as join5, relative as relative2, resolve as resolve3, sep as sep2 } from "path";
 function assertInside2(root, candidate) {
   const rel = relative2(root, candidate);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep2}`) || isAbsolute2(rel)) {
@@ -20038,21 +20306,21 @@ class SqliteRecoveryService {
   }
   async prepare(input) {
     validateMutation(input.sql);
-    const workspaceRoot = await realpath2(resolve2(input.workspaceRoot));
-    const databasePath = resolve2(workspaceRoot, input.databasePath);
+    const workspaceRoot = await realpath3(resolve3(input.workspaceRoot));
+    const databasePath = resolve3(workspaceRoot, input.databasePath);
     assertInside2(workspaceRoot, databasePath);
-    assertWithin2(workspaceRoot, await realpath2(dirname2(databasePath)));
-    const stat = await lstat2(databasePath);
+    assertWithin2(workspaceRoot, await realpath3(dirname2(databasePath)));
+    const stat = await lstat3(databasePath);
     if (!stat.isFile() || stat.isSymbolicLink())
       throw new Error("SQLite database must be a regular file inside the workspace");
     const snapshot = serializeDatabase(databasePath, true);
     const stateWitness = sha256(snapshot);
     drillMutation(snapshot, input.sql);
-    const id = randomUUID2();
-    const artifactDir = join4(this.dataDir, "artifacts", id);
-    await mkdir4(artifactDir, { recursive: true, mode: 448 });
-    await writeFile3(join4(artifactDir, "before.sqlite"), snapshot, { mode: 384 });
-    const artifactWitness = sha256(await readFile4(join4(artifactDir, "before.sqlite")));
+    const id = randomUUID3();
+    const artifactDir = join5(this.dataDir, "artifacts", id);
+    await mkdir5(artifactDir, { recursive: true, mode: 448 });
+    await writeFile4(join5(artifactDir, "before.sqlite"), snapshot, { mode: 384 });
+    const artifactWitness = sha256(await readFile5(join5(artifactDir, "before.sqlite")));
     if (artifactWitness !== stateWitness)
       throw new Error("SQLite recovery artifact failed witness verification");
     const createdAt = new Date;
@@ -20110,7 +20378,7 @@ class SqliteRecoveryService {
     if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness || claims.statementDigest !== operation.statementDigest) {
       throw new Error("Capability is not bound to this SQLite recovery proof");
     }
-    const databasePath = join4(operation.workspaceRoot, operation.databasePath);
+    const databasePath = join5(operation.workspaceRoot, operation.databasePath);
     const database = new Database(databasePath, { create: false, strict: true });
     let postCommitWitness;
     try {
@@ -20138,11 +20406,11 @@ class SqliteRecoveryService {
     if (operation.status !== "committed" || !operation.postCommitWitness) {
       throw new Error(`Operation is not recoverable from status: ${operation.status}`);
     }
-    const databasePath = join4(operation.workspaceRoot, operation.databasePath);
+    const databasePath = join5(operation.workspaceRoot, operation.databasePath);
     if (sha256(serializeDatabase(databasePath, true)) !== operation.postCommitWitness) {
       throw new Error("SQLite recovery would overwrite state changed after the authorized mutation");
     }
-    const snapshot = await readFile4(join4(operation.artifactDir, "before.sqlite"));
+    const snapshot = await readFile5(join5(operation.artifactDir, "before.sqlite"));
     if (sha256(snapshot) !== operation.stateWitness)
       throw new Error("SQLite recovery artifact witness is invalid");
     const restored = Database.deserialize(snapshot, { readonly: true, strict: true });
@@ -20151,13 +20419,13 @@ class SqliteRecoveryService {
     } finally {
       restored.close();
     }
-    const mode = (await lstat2(databasePath)).mode;
+    const mode = (await lstat3(databasePath)).mode;
     const temporaryPath = `${databasePath}.recovery-${operation.id}.tmp`;
-    await writeFile3(temporaryPath, snapshot, { mode: 384 });
-    await chmod2(temporaryPath, mode);
+    await writeFile4(temporaryPath, snapshot, { mode: 384 });
+    await chmod3(temporaryPath, mode);
     await Promise.all([
-      rm2(`${databasePath}-wal`, { force: true }),
-      rm2(`${databasePath}-shm`, { force: true })
+      rm3(`${databasePath}-wal`, { force: true }),
+      rm3(`${databasePath}-shm`, { force: true })
     ]);
     await rename2(temporaryPath, databasePath);
     if (sha256(serializeDatabase(databasePath, true)) !== operation.stateWitness) {
@@ -20180,13 +20448,14 @@ class SqliteRecoveryService {
 }
 
 // src/server.ts
-var dataDir = resolve3(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+var dataDir = resolve4(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
 var store = new OperationStore(dataDir);
 var signer = await CapabilitySigner.load(dataDir);
 var filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
+var gitService = new GitRecoveryService(dataDir, store, signer);
 var sqliteService = new SqliteRecoveryService(dataDir, store, signer);
-var server = new McpServer({ name: "recovery-authority", version: "0.3.0" }, {
-  instructions: "Use Recovery Authority for destructive filesystem and SQLite operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted."
+var server = new McpServer({ name: "recovery-authority", version: "0.4.0" }, {
+  instructions: "Use Recovery Authority for destructive filesystem, SQLite, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted."
 });
 server.registerTool("recovery_prepare_filesystem_delete", {
   title: "Prove filesystem recovery",
@@ -20221,6 +20490,44 @@ server.registerTool("recovery_restore_filesystem_delete", {
 }, async (input) => {
   const parsed = OperationInput.parse(input);
   const operation = await filesystemService.recover(parsed.operationId);
+  return {
+    content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+    structuredContent: operation
+  };
+});
+server.registerTool("recovery_prepare_git_reset_hard", {
+  title: "Prove Git hard-reset recovery",
+  description: "Snapshot HEAD, the index, and complete worktree state, drill git reset --hard and restoration in an isolated repository, then issue a capability bound to the target commit.",
+  inputSchema: PrepareGitResetHardInput.shape,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+}, async (input) => {
+  const result = await gitService.prepare(PrepareGitResetHardInput.parse(input));
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    structuredContent: result
+  };
+});
+server.registerTool("recovery_commit_git_reset_hard", {
+  title: "Commit proven Git hard reset",
+  description: "Run git reset --hard only when the signed proof and current HEAD/index/worktree witness still match.",
+  inputSchema: CommitGitResetHardInput.shape,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+}, async (input) => {
+  const parsed = CommitGitResetHardInput.parse(input);
+  const operation = await gitService.commit(parsed.operationId, parsed.capability);
+  return {
+    content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+    structuredContent: operation
+  };
+});
+server.registerTool("recovery_restore_git_reset_hard", {
+  title: "Restore committed Git hard reset",
+  description: "Restore the original HEAD, index, tracked changes, and untracked worktree state when post-reset state has not changed.",
+  inputSchema: OperationInput.shape,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+}, async (input) => {
+  const parsed = OperationInput.parse(input);
+  const operation = await gitService.recover(parsed.operationId);
   return {
     content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
     structuredContent: operation

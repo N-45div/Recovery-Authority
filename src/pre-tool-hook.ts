@@ -45,6 +45,8 @@ export function evaluateHook(rawInput: unknown): HookDecision {
     nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete.";
   } else if (categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
     nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the returned capability with recovery_commit_sqlite_mutation.";
+  } else if (categorySet.size === 1 && categorySet.has("git.reset-hard")) {
+    nextStep = "Call recovery_prepare_git_reset_hard with the repository root and target commit, then use the returned capability with recovery_commit_git_reset_hard.";
   } else {
     nextStep = "No single exact recovery adapter covers every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
   }

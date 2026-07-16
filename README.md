@@ -13,13 +13,17 @@ The filesystem adapter protects scoped deletes:
 
 The SQLite adapter serializes the connection-visible database image, runs the exact destructive SQL against an isolated copy, verifies `PRAGMA integrity_check`, and binds both the SQL digest and database witness into the capability.
 
+The Git adapter snapshots `HEAD`, its symbolic ref, the raw index, tracked modifications, and untracked worktree state. It drills `git reset --hard` and restoration in an isolated repository before authorizing the live reset.
+
 The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers.
 
 ## Current boundary
 
-After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is currently available for `filesystem.delete` and local `sqlite.mutate`; filesystem overwrites, destructive Git, remote databases, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
+After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is currently available for `filesystem.delete`, local `sqlite.mutate`, and `git.reset-hard`; filesystem overwrites, other destructive Git commands, remote databases, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
 SQLite recovery assumes no external process keeps writing through the restore window. State witnesses reject changes before commit and after commit, but this version does not provide a distributed database lock.
+
+Git hard-reset recovery rejects submodules, linked worktrees, custom hooks/content filters, redirected worktrees, and in-progress merge, rebase, cherry-pick, or revert state. It restores developer-visible repository state; Git reflog entries created by reset and recovery remain as audit history.
 
 ## Requirements
 
@@ -71,6 +75,9 @@ Navigate with left/right or `1`-`5`. The views show mission status, intercepted 
 - `recovery_prepare_filesystem_delete`
 - `recovery_commit_filesystem_delete`
 - `recovery_restore_filesystem_delete`
+- `recovery_prepare_git_reset_hard`
+- `recovery_commit_git_reset_hard`
+- `recovery_restore_git_reset_hard`
 - `recovery_prepare_sqlite_mutation`
 - `recovery_commit_sqlite_mutation`
 - `recovery_restore_sqlite_mutation`

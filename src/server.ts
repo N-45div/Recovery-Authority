@@ -3,13 +3,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { resolve } from "node:path";
 import {
   CommitFilesystemDeleteInput,
+  CommitGitResetHardInput,
   CommitSqliteMutationInput,
   OperationInput,
   PrepareFilesystemDeleteInput,
+  PrepareGitResetHardInput,
   PrepareSqliteMutationInput,
 } from "./contracts.js";
 import { CapabilitySigner } from "./crypto.js";
 import { FilesystemRecoveryService } from "./filesystem.js";
+import { GitRecoveryService } from "./git.js";
 import { SqliteRecoveryService } from "./sqlite.js";
 import { OperationStore } from "./store.js";
 
@@ -17,13 +20,14 @@ const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-au
 const store = new OperationStore(dataDir);
 const signer = await CapabilitySigner.load(dataDir);
 const filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
+const gitService = new GitRecoveryService(dataDir, store, signer);
 const sqliteService = new SqliteRecoveryService(dataDir, store, signer);
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.3.0" },
+  { name: "recovery-authority", version: "0.4.0" },
   {
     instructions:
-      "Use Recovery Authority for destructive filesystem and SQLite operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted.",
+      "Use Recovery Authority for destructive filesystem, SQLite, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted.",
   },
 );
 
@@ -73,6 +77,59 @@ server.registerTool(
   async (input) => {
     const parsed = OperationInput.parse(input);
     const operation = await filesystemService.recover(parsed.operationId);
+    return {
+      content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+      structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_prepare_git_reset_hard",
+  {
+    title: "Prove Git hard-reset recovery",
+    description: "Snapshot HEAD, the index, and complete worktree state, drill git reset --hard and restoration in an isolated repository, then issue a capability bound to the target commit.",
+    inputSchema: PrepareGitResetHardInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const result = await gitService.prepare(PrepareGitResetHardInput.parse(input));
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_commit_git_reset_hard",
+  {
+    title: "Commit proven Git hard reset",
+    description: "Run git reset --hard only when the signed proof and current HEAD/index/worktree witness still match.",
+    inputSchema: CommitGitResetHardInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = CommitGitResetHardInput.parse(input);
+    const operation = await gitService.commit(parsed.operationId, parsed.capability);
+    return {
+      content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+      structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_restore_git_reset_hard",
+  {
+    title: "Restore committed Git hard reset",
+    description: "Restore the original HEAD, index, tracked changes, and untracked worktree state when post-reset state has not changed.",
+    inputSchema: OperationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = OperationInput.parse(input);
+    const operation = await gitService.recover(parsed.operationId);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
       structuredContent: operation,

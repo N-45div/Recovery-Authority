@@ -45,7 +45,7 @@ async function hashFile(path: string): Promise<string> {
   return sha256(await readFile(path));
 }
 
-async function collectRecords(root: string, absolutePath: string): Promise<FileRecord[]> {
+export async function collectRecords(root: string, absolutePath: string): Promise<FileRecord[]> {
   const stat = await lstat(absolutePath);
   const path = relative(root, absolutePath);
 
@@ -63,11 +63,11 @@ async function collectRecords(root: string, absolutePath: string): Promise<FileR
   return [{ path, kind: "directory", mode: stat.mode, sha256: null, symlinkTarget: null }, ...nested.flat()];
 }
 
-function witness(records: FileRecord[]): string {
+export function recordsWitness(records: FileRecord[]): string {
   return sha256(JSON.stringify([...records].sort((a, b) => a.path.localeCompare(b.path))));
 }
 
-async function restoreRecords(payloadRoot: string, destinationRoot: string, records: FileRecord[]): Promise<void> {
+export async function restoreRecords(payloadRoot: string, destinationRoot: string, records: FileRecord[]): Promise<void> {
   for (const record of records.filter((item) => item.kind === "directory").sort((a, b) => a.path.length - b.path.length)) {
     await mkdir(join(destinationRoot, record.path), { recursive: true, mode: record.mode });
   }
@@ -81,6 +81,9 @@ async function restoreRecords(payloadRoot: string, destinationRoot: string, reco
       await cp(join(payloadRoot, record.path), destination, { preserveTimestamps: true });
       await chmod(destination, record.mode);
     }
+  }
+  for (const record of records.filter((item) => item.kind === "directory").sort((a, b) => b.path.length - a.path.length)) {
+    await chmod(join(destinationRoot, record.path), record.mode);
   }
 }
 
@@ -103,7 +106,7 @@ export class FilesystemRecoveryService {
     const normalizedPaths = absolutePaths.map((path) => relative(workspaceRoot, path));
 
     const records = (await Promise.all(absolutePaths.map((path) => collectRecords(workspaceRoot, path)))).flat();
-    const stateWitness = witness(records);
+    const stateWitness = recordsWitness(records);
     const id = randomUUID();
     const artifactDir = join(this.dataDir, "artifacts", id);
     const payloadRoot = join(artifactDir, "payload");
@@ -119,7 +122,7 @@ export class FilesystemRecoveryService {
     try {
       await restoreRecords(payloadRoot, restoreRoot, records);
       const restoredRecords = (await Promise.all(normalizedPaths.map((path) => collectRecords(restoreRoot, join(restoreRoot, path))))).flat();
-      if (witness(restoredRecords) !== stateWitness) throw new Error("Restore drill produced a different state witness");
+      if (recordsWitness(restoredRecords) !== stateWitness) throw new Error("Restore drill produced a different state witness");
     } finally {
       await rm(restoreRoot, { recursive: true, force: true });
     }
@@ -174,7 +177,7 @@ export class FilesystemRecoveryService {
     }
 
     const currentRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join(operation.workspaceRoot, path))))).flat();
-    if (witness(currentRecords) !== operation.stateWitness) throw new Error("Protected state changed after the recovery proof was issued");
+    if (recordsWitness(currentRecords) !== operation.stateWitness) throw new Error("Protected state changed after the recovery proof was issued");
 
     for (const path of [...operation.paths].sort((a, b) => b.length - a.length)) {
       await rm(join(operation.workspaceRoot, path), { recursive: true, force: false });
@@ -195,7 +198,7 @@ export class FilesystemRecoveryService {
     }
     await restoreRecords(join(operation.artifactDir, "payload"), operation.workspaceRoot, operation.records);
     const restoredRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join(operation.workspaceRoot, path))))).flat();
-    if (witness(restoredRecords) !== operation.stateWitness) throw new Error("Recovery completed but invariant verification failed");
+    if (recordsWitness(restoredRecords) !== operation.stateWitness) throw new Error("Recovery completed but invariant verification failed");
     const recovered: FilesystemRecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
     await this.store.put(recovered);
     return recovered;

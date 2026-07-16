@@ -28,6 +28,17 @@ export const CommitSqliteMutationInput = OperationInput.extend({
   sql: z.string().min(1).max(100_000),
 });
 
+export const PrepareGitResetHardInput = z.object({
+  repositoryRoot: z.string().min(1).describe("Absolute path to the Git worktree root"),
+  target: z.string().min(1).max(500).default("HEAD").describe("Commit-ish passed to git reset --hard"),
+  reason: z.string().min(1).max(500),
+  ttlSeconds: z.number().int().min(30).max(900).default(300),
+});
+
+export const CommitGitResetHardInput = OperationInput.extend({
+  capability: z.string().min(1),
+});
+
 export const FileRecord = z.object({
   path: z.string(),
   kind: z.enum(["file", "directory", "symlink"]),
@@ -65,14 +76,29 @@ export const SqliteRecoveryOperation = RecoveryOperationBase.extend({
   postCommitWitness: z.string().nullable(),
 });
 
+export const GitResetHardRecoveryOperation = RecoveryOperationBase.extend({
+  kind: z.literal("git.reset-hard"),
+  repositoryRoot: z.string(),
+  targetCommit: z.string(),
+  originalHead: z.string(),
+  originalHeadRef: z.string().nullable(),
+  records: z.array(FileRecord),
+  indexDigest: z.string(),
+  indexMode: z.number().int(),
+  postCommitWitness: z.string().nullable(),
+});
+
 export const RecoveryOperation = z.discriminatedUnion("kind", [
   FilesystemRecoveryOperation,
   SqliteRecoveryOperation,
+  GitResetHardRecoveryOperation,
 ]);
 
 export type FileRecord = z.infer<typeof FileRecord>;
 export type RecoveryOperation = z.infer<typeof RecoveryOperation>;
 export type FilesystemRecoveryOperation = z.infer<typeof FilesystemRecoveryOperation>;
 export type SqliteRecoveryOperation = z.infer<typeof SqliteRecoveryOperation>;
+export type GitResetHardRecoveryOperation = z.infer<typeof GitResetHardRecoveryOperation>;
 export type PrepareFilesystemDelete = z.infer<typeof PrepareFilesystemDeleteInput>;
 export type PrepareSqliteMutation = z.infer<typeof PrepareSqliteMutationInput>;
+export type PrepareGitResetHard = z.infer<typeof PrepareGitResetHardInput>;

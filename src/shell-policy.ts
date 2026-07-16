@@ -4,6 +4,7 @@ import { basename } from "node:path";
 export type RiskCategory =
   | "filesystem.delete"
   | "filesystem.overwrite"
+  | "git.reset-hard"
   | "git.destructive"
   | "sqlite.mutate"
   | "database.destructive"
@@ -54,7 +55,8 @@ function finding(category: RiskCategory, executable: string, reason: string): Ri
     category,
     executable,
     reason,
-    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate",
+    adapterAvailable:
+      category === "filesystem.delete" || category === "sqlite.mutate" || category === "git.reset-hard",
   };
 }
 
@@ -74,8 +76,17 @@ function classifyWords(input: string[]): RiskFinding[] {
     return [finding("filesystem.overwrite", executable, `${executable} can irreversibly overwrite file contents`)];
   }
   if (executable === "git") {
-    const subcommand = args.find((arg) => !arg.startsWith("-"));
-    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout" || (subcommand === "reset" && args.includes("--hard"))) {
+    let index = 0;
+    while (index < args.length && args[index]?.startsWith("-")) {
+      if (["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(args[index] ?? "")) index += 2;
+      else index += 1;
+    }
+    const subcommand = args[index];
+    const subcommandArgs = args.slice(index + 1);
+    if (subcommand === "reset" && subcommandArgs.includes("--hard")) {
+      return [finding("git.reset-hard", executable, "git reset --hard discards index and worktree state")];
+    }
+    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout") {
       return [finding("git.destructive", executable, `git ${subcommand} can discard uncommitted state`)];
     }
   }

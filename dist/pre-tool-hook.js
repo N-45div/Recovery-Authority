@@ -14622,7 +14622,7 @@ function base64url(value) {
 }
 var CapabilityClaims = exports_external.object({
   operationId: exports_external.string().uuid(),
-  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate"]),
+  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard"]),
   proofDigest: exports_external.string(),
   stateWitness: exports_external.string(),
   statementDigest: exports_external.string().nullable().default(null),
@@ -14719,7 +14719,7 @@ function finding(category, executable, reason) {
     category,
     executable,
     reason,
-    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate"
+    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate" || category === "git.reset-hard"
   };
 }
 function classifyWords(input) {
@@ -14738,8 +14738,19 @@ function classifyWords(input) {
     return [finding("filesystem.overwrite", executable, `${executable} can irreversibly overwrite file contents`)];
   }
   if (executable === "git") {
-    const subcommand = args2.find((arg) => !arg.startsWith("-"));
-    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout" || subcommand === "reset" && args2.includes("--hard")) {
+    let index = 0;
+    while (index < args2.length && args2[index]?.startsWith("-")) {
+      if (["-C", "-c", "--git-dir", "--work-tree", "--namespace"].includes(args2[index] ?? ""))
+        index += 2;
+      else
+        index += 1;
+    }
+    const subcommand = args2[index];
+    const subcommandArgs = args2.slice(index + 1);
+    if (subcommand === "reset" && subcommandArgs.includes("--hard")) {
+      return [finding("git.reset-hard", executable, "git reset --hard discards index and worktree state")];
+    }
+    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout") {
       return [finding("git.destructive", executable, `git ${subcommand} can discard uncommitted state`)];
     }
   }
@@ -14830,6 +14841,8 @@ function evaluateHook(rawInput) {
     nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete.";
   } else if (categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
     nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the returned capability with recovery_commit_sqlite_mutation.";
+  } else if (categorySet.size === 1 && categorySet.has("git.reset-hard")) {
+    nextStep = "Call recovery_prepare_git_reset_hard with the repository root and target commit, then use the returned capability with recovery_commit_git_reset_hard.";
   } else {
     nextStep = "No single exact recovery adapter covers every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
   }
