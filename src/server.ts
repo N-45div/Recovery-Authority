@@ -4,15 +4,19 @@ import { resolve } from "node:path";
 import {
   CommitFilesystemDeleteInput,
   CommitGitResetHardInput,
+  CommitPostgresMutationInput,
   CommitSqliteMutationInput,
   OperationInput,
   PrepareFilesystemDeleteInput,
   PrepareGitResetHardInput,
+  PreparePostgresMutationInput,
   PrepareSqliteMutationInput,
+  RestorePostgresMutationInput,
 } from "./contracts.js";
 import { CapabilitySigner } from "./crypto.js";
 import { FilesystemRecoveryService } from "./filesystem.js";
 import { GitRecoveryService } from "./git.js";
+import { PostgresRecoveryService } from "./postgres.js";
 import { SqliteRecoveryService } from "./sqlite.js";
 import { OperationStore } from "./store.js";
 
@@ -21,13 +25,14 @@ const store = new OperationStore(dataDir);
 const signer = await CapabilitySigner.load(dataDir);
 const filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
 const gitService = new GitRecoveryService(dataDir, store, signer);
+const postgresService = new PostgresRecoveryService(dataDir, store, signer);
 const sqliteService = new SqliteRecoveryService(dataDir, store, signer);
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.4.0" },
+  { name: "recovery-authority", version: "0.5.0" },
   {
     instructions:
-      "Use Recovery Authority for destructive filesystem, SQLite, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted.",
+      "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted.",
   },
 );
 
@@ -183,6 +188,59 @@ server.registerTool(
   async (input) => {
     const parsed = OperationInput.parse(input);
     const operation = await sqliteService.recover(parsed.operationId);
+    return {
+      content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+      structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_prepare_postgres_mutation",
+  {
+    title: "Prove PostgreSQL mutation recovery",
+    description: "Create a full logical database dump, restore it into an isolated drill database, execute one schema-scoped destructive statement, and issue a proof-bound capability.",
+    inputSchema: PreparePostgresMutationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  async (input) => {
+    const result = await postgresService.prepare(PreparePostgresMutationInput.parse(input));
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_commit_postgres_mutation",
+  {
+    title: "Commit proven PostgreSQL mutation",
+    description: "Execute only the restore-tested PostgreSQL statement when the signed capability and live full-database witness still match.",
+    inputSchema: CommitPostgresMutationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  async (input) => {
+    const parsed = CommitPostgresMutationInput.parse(input);
+    const operation = await postgresService.commit(parsed.operationId, parsed.capability, parsed.connectionUri, parsed.sql);
+    return {
+      content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+      structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_restore_postgres_mutation",
+  {
+    title: "Restore committed PostgreSQL mutation",
+    description: "Restore the full logical database dump only when no state changed after the authorized PostgreSQL mutation.",
+    inputSchema: RestorePostgresMutationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  async (input) => {
+    const parsed = RestorePostgresMutationInput.parse(input);
+    const operation = await postgresService.recover(parsed.operationId, parsed.connectionUri);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
       structuredContent: operation,

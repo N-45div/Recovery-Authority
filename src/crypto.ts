@@ -13,7 +13,7 @@ function base64url(value: Buffer | string): string {
 
 const CapabilityClaims = z.object({
   operationId: z.string().uuid(),
-  kind: z.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard"]),
+  kind: z.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard", "postgres.schema-mutate"]),
   proofDigest: z.string(),
   stateWitness: z.string(),
   statementDigest: z.string().nullable().default(null),

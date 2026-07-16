@@ -252,10 +252,11 @@ fn authority_lines() -> (&'static str, Vec<Line<'static>>) {
         vec![
             Line::from("EXACT RECOVERY   filesystem.delete"),
             Line::from("EXACT RECOVERY   sqlite.mutate"),
+            Line::from("EXACT RECOVERY   postgres.schema-mutate"),
             Line::from("EXACT RECOVERY   git.reset-hard"),
             Line::from("BLOCK ONLY       filesystem.overwrite"),
             Line::from("BLOCK ONLY       git.destructive"),
-            Line::from("BLOCK ONLY       database.destructive"),
+            Line::from("BLOCK ONLY       other database.destructive"),
             Line::from("BLOCK ONLY       infrastructure.destructive"),
             Line::from("BLOCK ONLY       opaque.execution"),
             Line::from(""),

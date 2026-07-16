@@ -1,6 +1,6 @@
 {
   "name": "recovery-authority",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Require proven recovery before Codex performs destructive operations.",
   "author": {
     "name": "Recovery Authority"
@@ -11,12 +11,13 @@
   "interface": {
     "displayName": "Recovery Authority",
     "shortDescription": "Prove recovery before destructive actions",
-    "longDescription": "Creates filesystem, SQLite, or Git recovery artifacts, restore-tests them, and grants short-lived capabilities for destructive Codex operations.",
+    "longDescription": "Creates filesystem, SQLite, PostgreSQL, or Git recovery artifacts, restore-tests them, and grants short-lived capabilities for destructive Codex operations.",
     "developerName": "Recovery Authority",
     "category": "Developer Tools",
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": [
       "Safely delete these files with a recovery proof.",
+      "Prove this PostgreSQL deletion can be recovered before running it.",
       "Show the recovery status for this operation."
     ]
   },

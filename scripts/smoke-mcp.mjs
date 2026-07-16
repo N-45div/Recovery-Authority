@@ -64,13 +64,16 @@ try {
     [
       "recovery_commit_filesystem_delete",
       "recovery_commit_git_reset_hard",
+      "recovery_commit_postgres_mutation",
       "recovery_commit_sqlite_mutation",
       "recovery_get_operation",
       "recovery_prepare_filesystem_delete",
       "recovery_prepare_git_reset_hard",
+      "recovery_prepare_postgres_mutation",
       "recovery_prepare_sqlite_mutation",
       "recovery_restore_filesystem_delete",
       "recovery_restore_git_reset_hard",
+      "recovery_restore_postgres_mutation",
       "recovery_restore_sqlite_mutation",
     ],
   );

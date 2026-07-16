@@ -15,21 +15,26 @@ The SQLite adapter serializes the connection-visible database image, runs the ex
 
 The Git adapter snapshots `HEAD`, its symbolic ref, the raw index, tracked modifications, and untracked worktree state. It drills `git reset --hard` and restoration in an isolated repository before authorizing the live reset.
 
+The PostgreSQL adapter parses one destructive statement into an AST, limits direct and referenced relations to an authorized schema, and takes a full logical database dump so database-local cascades are recoverable. It restores the dump into a temporary database, reproduces the original witness, executes the exact SQL there, and binds the expected post-mutation witness before issuing a capability. Live commit must produce the same witness. Connection credentials are supplied per call and are never written to the operation ledger.
+
 The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers.
 
 ## Current boundary
 
-After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is currently available for `filesystem.delete`, local `sqlite.mutate`, and `git.reset-hard`; filesystem overwrites, other destructive Git commands, remote databases, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
+After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is available for `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`; filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
 SQLite recovery assumes no external process keeps writing through the restore window. State witnesses reject changes before commit and after commit, but this version does not provide a distributed database lock.
 
 Git hard-reset recovery rejects submodules, linked worktrees, custom hooks/content filters, redirected worktrees, and in-progress merge, rebase, cherry-pick, or revert state. It restores developer-visible repository state; Git reflog entries created by reset and recovery remain as audit history.
+
+PostgreSQL recovery accepts one parsed `DELETE`, `UPDATE`, `TRUNCATE`, `DROP TABLE`, `DROP SEQUENCE`, or `DROP INDEX` statement. Referenced relations must remain in the authorized schema. Function calls, nested queries, user or event triggers, and relevant logical publications are rejected because their effects can escape exact database recovery. The connection role needs permission to create and drop a temporary drill database. Logical dumps protect database contents and objects, not cluster roles, tablespaces, external service effects, or already-consumed replication events. Full-database witnesses reject concurrent changes before commit and before restore; they are optimistic guards, not distributed locks.
 
 ## Requirements
 
 - macOS or Linux
 - Bun 1.3+
 - Rust 1.89+ for the optional TUI
+- PostgreSQL `pg_dump` and `psql` compatible with the protected server when using the PostgreSQL adapter
 
 ## Setup
 
@@ -50,12 +55,15 @@ bun run build
 cargo build --release -p recovery-authority
 ```
 
+The PostgreSQL adapter defaults to `pg_dump` and `psql` on `PATH`. Override them for a managed installation or container wrapper with `RECOVERY_AUTHORITY_PG_DUMP` and `RECOVERY_AUTHORITY_PSQL`. `RECOVERY_AUTHORITY_MAX_DUMP_BYTES` defaults to 512 MiB, and `RECOVERY_AUTHORITY_POSTGRES_TIMEOUT_MS` defaults to 120 seconds.
+
 The repository root is the Codex plugin. Its manifest is `.codex-plugin/plugin.json`, and `.mcp.json` launches the bundled stdio MCP server.
 
 ## Development
 
 ```bash
 bun test
+RECOVERY_POSTGRES_INTEGRATION=1 bun test tests/postgres.integration.test.ts
 bun run test:mcp
 bun run check
 bun run build
@@ -81,6 +89,9 @@ Navigate with left/right or `1`-`5`. The views show mission status, intercepted 
 - `recovery_prepare_sqlite_mutation`
 - `recovery_commit_sqlite_mutation`
 - `recovery_restore_sqlite_mutation`
+- `recovery_prepare_postgres_mutation`
+- `recovery_commit_postgres_mutation`
+- `recovery_restore_postgres_mutation`
 - `recovery_get_operation`
 
 ## Shell policy

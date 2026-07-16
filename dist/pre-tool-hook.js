@@ -14622,7 +14622,7 @@ function base64url(value) {
 }
 var CapabilityClaims = exports_external.object({
   operationId: exports_external.string().uuid(),
-  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard"]),
+  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard", "postgres.schema-mutate"]),
   proofDigest: exports_external.string(),
   stateWitness: exports_external.string(),
   statementDigest: exports_external.string().nullable().default(null),
@@ -14719,7 +14719,7 @@ function finding(category, executable, reason) {
     category,
     executable,
     reason,
-    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate" || category === "git.reset-hard"
+    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate" || category === "postgres.schema-mutate" || category === "git.reset-hard"
   };
 }
 function classifyWords(input) {
@@ -14756,9 +14756,12 @@ function classifyWords(input) {
   }
   if (["psql", "mysql", "sqlite3", "mongosh"].includes(executable)) {
     const statement = args2.join(" ");
-    if (/\b(drop|truncate|delete\s+from|alter\s+table)\b/i.test(statement)) {
+    if (/\b(drop|truncate|delete\s+from|update\s+|alter\s+table)\b/i.test(statement)) {
       if (executable === "sqlite3") {
         return [finding("sqlite.mutate", executable, "sqlite3 contains a destructive database statement")];
+      }
+      if (executable === "psql") {
+        return [finding("postgres.schema-mutate", executable, "psql contains a destructive PostgreSQL statement")];
       }
       return [finding("database.destructive", executable, `${executable} contains a destructive database statement`)];
     }
@@ -14843,6 +14846,8 @@ function evaluateHook(rawInput) {
     nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the returned capability with recovery_commit_sqlite_mutation.";
   } else if (categorySet.size === 1 && categorySet.has("git.reset-hard")) {
     nextStep = "Call recovery_prepare_git_reset_hard with the repository root and target commit, then use the returned capability with recovery_commit_git_reset_hard.";
+  } else if (categorySet.size === 1 && categorySet.has("postgres.schema-mutate")) {
+    nextStep = "Call recovery_prepare_postgres_mutation with the connection URI, authorized schema, and exact SQL, then use the returned capability with recovery_commit_postgres_mutation.";
   } else {
     nextStep = "No single exact recovery adapter covers every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
   }

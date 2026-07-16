@@ -19,7 +19,8 @@ describe("shell policy", () => {
     ["dd if=/dev/zero of=production.db", "filesystem.overwrite"],
     ["git reset --hard HEAD", "git.reset-hard"],
     ["git -C repo reset --hard HEAD", "git.reset-hard"],
-    ["psql -c 'DROP TABLE users'", "database.destructive"],
+    ["psql -c 'DROP TABLE users'", "postgres.schema-mutate"],
+    ["psql -c 'UPDATE users SET active = false'", "postgres.schema-mutate"],
     ["sqlite3 app.sqlite 'DELETE FROM users'", "sqlite.mutate"],
     ["terraform destroy -auto-approve", "infrastructure.destructive"],
     ["kubectl delete namespace production", "infrastructure.destructive"],
@@ -68,5 +69,17 @@ describe("shell policy", () => {
 
     expect(decision.blocked).toBe(false);
     expect(decision.output).toBeNull();
+  });
+
+  test("routes destructive psql through the PostgreSQL recovery adapter", () => {
+    const decision = evaluateHook({
+      hook_event_name: "PreToolUse",
+      cwd: "/workspace",
+      tool_name: "Bash",
+      tool_input: { command: "psql -c 'TRUNCATE public.users'" },
+    });
+
+    expect(decision.blocked).toBe(true);
+    expect(JSON.stringify(decision.output)).toContain("recovery_prepare_postgres_mutation");
   });
 });

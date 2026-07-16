@@ -7,6 +7,7 @@ export type RiskCategory =
   | "git.reset-hard"
   | "git.destructive"
   | "sqlite.mutate"
+  | "postgres.schema-mutate"
   | "database.destructive"
   | "infrastructure.destructive"
   | "opaque.execution";
@@ -56,7 +57,10 @@ function finding(category: RiskCategory, executable: string, reason: string): Ri
     executable,
     reason,
     adapterAvailable:
-      category === "filesystem.delete" || category === "sqlite.mutate" || category === "git.reset-hard",
+      category === "filesystem.delete" ||
+      category === "sqlite.mutate" ||
+      category === "postgres.schema-mutate" ||
+      category === "git.reset-hard",
   };
 }
 
@@ -92,9 +96,12 @@ function classifyWords(input: string[]): RiskFinding[] {
   }
   if (["psql", "mysql", "sqlite3", "mongosh"].includes(executable)) {
     const statement = args.join(" ");
-    if (/\b(drop|truncate|delete\s+from|alter\s+table)\b/i.test(statement)) {
+    if (/\b(drop|truncate|delete\s+from|update\s+|alter\s+table)\b/i.test(statement)) {
       if (executable === "sqlite3") {
         return [finding("sqlite.mutate", executable, "sqlite3 contains a destructive database statement")];
+      }
+      if (executable === "psql") {
+        return [finding("postgres.schema-mutate", executable, "psql contains a destructive PostgreSQL statement")];
       }
       return [finding("database.destructive", executable, `${executable} contains a destructive database statement`)];
     }

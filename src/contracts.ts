@@ -39,6 +39,24 @@ export const CommitGitResetHardInput = OperationInput.extend({
   capability: z.string().min(1),
 });
 
+export const PreparePostgresMutationInput = z.object({
+  connectionUri: z.string().url().describe("PostgreSQL connection URI; credentials are never persisted"),
+  schema: z.string().regex(/^[A-Za-z_][A-Za-z0-9_$]*$/).default("public"),
+  sql: z.string().min(1).max(100_000),
+  reason: z.string().min(1).max(500),
+  ttlSeconds: z.number().int().min(30).max(900).default(300),
+});
+
+export const CommitPostgresMutationInput = OperationInput.extend({
+  capability: z.string().min(1),
+  connectionUri: z.string().url(),
+  sql: z.string().min(1).max(100_000),
+});
+
+export const RestorePostgresMutationInput = OperationInput.extend({
+  connectionUri: z.string().url(),
+});
+
 export const FileRecord = z.object({
   path: z.string(),
   kind: z.enum(["file", "directory", "symlink"]),
@@ -88,10 +106,22 @@ export const GitResetHardRecoveryOperation = RecoveryOperationBase.extend({
   postCommitWitness: z.string().nullable(),
 });
 
+export const PostgresRecoveryOperation = RecoveryOperationBase.extend({
+  kind: z.literal("postgres.schema-mutate"),
+  schema: z.string(),
+  backupScope: z.literal("database"),
+  connectionFingerprint: z.string(),
+  statementDigest: z.string(),
+  artifactDigest: z.string(),
+  drillPostWitness: z.string(),
+  postCommitWitness: z.string().nullable(),
+});
+
 export const RecoveryOperation = z.discriminatedUnion("kind", [
   FilesystemRecoveryOperation,
   SqliteRecoveryOperation,
   GitResetHardRecoveryOperation,
+  PostgresRecoveryOperation,
 ]);
 
 export type FileRecord = z.infer<typeof FileRecord>;
@@ -99,6 +129,8 @@ export type RecoveryOperation = z.infer<typeof RecoveryOperation>;
 export type FilesystemRecoveryOperation = z.infer<typeof FilesystemRecoveryOperation>;
 export type SqliteRecoveryOperation = z.infer<typeof SqliteRecoveryOperation>;
 export type GitResetHardRecoveryOperation = z.infer<typeof GitResetHardRecoveryOperation>;
+export type PostgresRecoveryOperation = z.infer<typeof PostgresRecoveryOperation>;
 export type PrepareFilesystemDelete = z.infer<typeof PrepareFilesystemDeleteInput>;
 export type PrepareSqliteMutation = z.infer<typeof PrepareSqliteMutationInput>;
 export type PrepareGitResetHard = z.infer<typeof PrepareGitResetHardInput>;
+export type PreparePostgresMutation = z.infer<typeof PreparePostgresMutationInput>;
