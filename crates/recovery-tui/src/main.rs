@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph, Tabs},
+    widgets::{Block, Borders, Paragraph, Tabs, Wrap},
 };
 
 #[derive(Parser)]
@@ -84,11 +84,13 @@ fn render(frame: &mut Frame, operations: &PathBuf) {
         Err(_) => "No recovery operations yet.\n\nPrepare a destructive operation through the Codex plugin to create the first restore-tested proof.".to_string(),
     };
     frame.render_widget(
-        Paragraph::new(body).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Restore-tested operations "),
-        ),
+        Paragraph::new(body)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Restore-tested operations "),
+            )
+            .wrap(Wrap { trim: true }),
         areas[1],
     );
     frame.render_widget(Line::from("q/esc quit"), areas[2]);
