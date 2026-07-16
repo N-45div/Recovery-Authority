@@ -1,0 +1,24 @@
+{
+  "name": "recovery-authority",
+  "version": "0.1.0",
+  "description": "Require proven recovery before Codex performs destructive operations.",
+  "author": {
+    "name": "Recovery Authority"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["codex", "recovery", "authorization", "safety"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Recovery Authority",
+    "shortDescription": "Prove recovery before destructive actions",
+    "longDescription": "Creates scoped recovery artifacts, restore-tests them, and grants short-lived capabilities for destructive Codex operations.",
+    "developerName": "Recovery Authority",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Safely delete these files with a recovery proof.",
+      "Show the recovery status for this operation."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

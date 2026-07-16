@@ -1,0 +1,20 @@
+{
+  "name": "recovery-authority",
+  "interface": {
+    "displayName": "Recovery Authority"
+  },
+  "plugins": [
+    {
+      "name": "recovery-authority",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

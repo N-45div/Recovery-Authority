@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "recovery-authority": {
+      "command": "bash",
+      "args": ["${PLUGIN_ROOT}/scripts/start-mcp.sh"],
+      "env": {
+        "RECOVERY_AUTHORITY_DATA_DIR": "${PLUGIN_DATA}"
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "recovery-authority",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "build": "bun build ./src/server.ts --outdir ./dist --target bun",
+    "check": "tsc --noEmit",
+    "dev": "bun run ./src/server.ts",
+    "test": "bun test",
+    "test:mcp": "node ./scripts/smoke-mcp.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.2"
+  }
+}
