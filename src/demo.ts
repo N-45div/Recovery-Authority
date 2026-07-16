@@ -52,6 +52,7 @@ async function main(): Promise<void> {
   process.stdout.write("[1/6] Launching disposable PostgreSQL 17\n");
   docker([
     "run", "--detach", "--rm", "--name", container,
+    "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,size=256m",
     "--env", "POSTGRES_PASSWORD=recovery",
     "--env", "POSTGRES_DB=app",
     "postgres:17-alpine",

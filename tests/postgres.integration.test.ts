@@ -35,6 +35,7 @@ integration("PostgreSQL recovery authority", () => {
     dataDir = join(temporaryRoot, "data");
     docker([
       "run", "--detach", "--rm", "--name", container,
+      "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,size=256m",
       "--env", "POSTGRES_PASSWORD=recovery",
       "--env", "POSTGRES_DB=app",
       "postgres:17-alpine",

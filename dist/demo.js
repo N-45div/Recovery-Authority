@@ -19413,6 +19413,8 @@ async function main() {
     "--rm",
     "--name",
     container,
+    "--tmpfs",
+    "/var/lib/postgresql/data:rw,nosuid,size=256m",
     "--env",
     "POSTGRES_PASSWORD=recovery",
     "--env",
