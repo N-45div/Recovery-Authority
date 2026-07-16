@@ -2,6 +2,7 @@ import parse from "bash-parser";
 import { basename } from "node:path";
 
 export type RiskCategory =
+  | "authorization.approval"
   | "filesystem.delete"
   | "filesystem.overwrite"
   | "git.reset-hard"
@@ -69,6 +70,15 @@ function classifyWords(input: string[]): RiskFinding[] {
   const executable = basename(words[0] ?? "").toLowerCase();
   const args = words.slice(1);
   if (!executable) return [];
+
+  if (
+    executable === "approve-operation.sh" ||
+    executable === "recovery-authority-approve" ||
+    (["bash", "sh", "zsh", "dash", "bun", "node"].includes(executable) &&
+      args.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg)))
+  ) {
+    return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
+  }
 
   if (["rm", "unlink", "shred", "rmdir"].includes(executable)) {
     return [finding("filesystem.delete", executable, `${executable} removes filesystem state`)];

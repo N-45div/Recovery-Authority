@@ -34,6 +34,26 @@ pub struct OperationLedger {
     pub operations: BTreeMap<String, RecoveryOperation>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorizationStatus {
+    Pending,
+    Approved,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizationRecord {
+    pub operation_id: String,
+    pub status: AuthorizationStatus,
+    pub proof_digest: String,
+    pub requested_at: DateTime<Utc>,
+    pub approved_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+    pub approval_digest: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookFinding {
@@ -68,5 +88,15 @@ mod tests {
         .expect("valid hook event");
         assert!(event.blocked);
         assert_eq!(event.findings[0].category, "filesystem.delete");
+    }
+
+    #[test]
+    fn parses_human_authorization_without_exposing_capability() {
+        let authorization: AuthorizationRecord = serde_json::from_str(
+            r#"{"operationId":"11111111-1111-4111-8111-111111111111","status":"approved","proofDigest":"proof","requestedAt":"2026-07-16T00:00:00Z","approvedAt":"2026-07-16T00:01:00Z","expiresAt":"2026-07-16T00:05:00Z","approvalDigest":"approval","capability":"ignored"}"#,
+        )
+        .expect("valid authorization record");
+        assert_eq!(authorization.status, AuthorizationStatus::Approved);
+        assert_eq!(authorization.approval_digest.as_deref(), Some("approval"));
     }
 }

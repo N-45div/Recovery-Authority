@@ -1,6 +1,24 @@
 # Recovery Authority
 
-Recovery Authority is a Codex plugin that requires a demonstrated inverse capability before granting a destructive forward capability.
+Recovery Authority is a Codex plugin that requires a demonstrated inverse capability and separate human approval before granting a destructive forward capability.
+
+Instead of asking only whether an agent is allowed to run a command, it asks whether the exact affected state has already been restored successfully. The resulting proof, scope, expected post-state, human approval, and expiry are bound into a short-lived signed capability.
+
+```text
+agent intent -> effect interception -> recovery artifact -> isolated restore drill
+             -> pending human approval -> signed capability -> guarded commit
+             -> evidence receipt -> exact restore when requested
+```
+
+## Run the complete demo
+
+With Bun, Docker, and the retained `postgres:17-alpine` image available:
+
+```bash
+bun run demo
+```
+
+The command launches a disposable PostgreSQL database, seeds `public` and `audit` schemas, proves recovery in an isolated drill database, pauses for a human proof confirmation, commits a deletion with a cross-schema cascade, restores both schemas, verifies their witnesses, and removes the container. It runs the bundled `dist/` artifacts and does not rebuild the plugin.
 
 The filesystem adapter protects scoped deletes:
 
@@ -17,11 +35,13 @@ The Git adapter snapshots `HEAD`, its symbolic ref, the raw index, tracked modif
 
 The PostgreSQL adapter parses one destructive statement into an AST, limits direct and referenced relations to an authorized schema, and takes a full logical database dump so database-local cascades are recoverable. It restores the dump into a temporary database, reproduces the original witness, executes the exact SQL there, and binds the expected post-mutation witness before issuing a capability. Live commit must produce the same witness. Connection credentials are supplied per call and are never written to the operation ledger.
 
-The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers.
+The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers. Prepare tools return a pending authorization and an exact separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
 
 ## Current boundary
 
 After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is available for `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`; filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
+
+The human approval gate is a control boundary for coding agents using the trusted hook and MCP server. It is not an operating-system sandbox against arbitrary malicious code already running as the same user. Approval records and signing material are mode-restricted local files; production multi-user deployment should move signing into an OS keychain, hardware authenticator, or remote policy service.
 
 SQLite recovery assumes no external process keeps writing through the restore window. State witnesses reject changes before commit and after commit, but this version does not provide a distributed database lock.
 
@@ -47,6 +67,8 @@ codex plugin add recovery-authority@recovery-authority
 
 Start a new Codex session, open `/hooks`, and trust the bundled Recovery Authority hook. Codex deliberately skips untrusted plugin hooks.
 
+When a prepare tool succeeds, show the returned `approvalCommand` to the user. The user runs it in a separate terminal and types the displayed 12-character proof prefix. The agent then calls `recovery_get_authorization` and can commit only with the returned approved capability.
+
 The bundled `dist/server.js` lets Codex launch the MCP server without rebuilding it. To rebuild from source or develop locally:
 
 ```bash
@@ -64,6 +86,7 @@ The repository root is the Codex plugin. Its manifest is `.codex-plugin/plugin.j
 ```bash
 bun test
 RECOVERY_POSTGRES_INTEGRATION=1 bun test tests/postgres.integration.test.ts
+bun run demo
 bun run test:mcp
 bun run check
 bun run build
@@ -92,15 +115,18 @@ Navigate with left/right or `1`-`5`. The views show mission status, intercepted 
 - `recovery_prepare_postgres_mutation`
 - `recovery_commit_postgres_mutation`
 - `recovery_restore_postgres_mutation`
+- `recovery_get_authorization`
 - `recovery_get_operation`
 
 ## Shell policy
 
-The hook currently detects destructive filesystem commands, destructive Git operations, destructive SQL passed to common database clients, Terraform/Kubernetes/cloud deletion commands, and opaque shell-script execution. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command.
+The hook currently detects destructive filesystem commands, destructive Git operations, destructive SQL passed to common database clients, approval-command execution, Terraform/Kubernetes/cloud deletion commands, and opaque shell-script execution. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command.
 
 ## OpenAI Build Week
 
-The project is being built with Codex during the official submission period. Codex is both the development collaborator and the first agent integration. GPT-5.6 will be used to propose effect scopes and human-readable invariants; deterministic recovery code remains the authorization authority.
+This project was built with Codex during the official submission period. Codex was used to research the agent-safety problem, challenge the initial CLI-only design, implement the Bun MCP server and Rust TUI, build the Bash AST hook, design the proof-bound capability contracts, write the PostgreSQL adapter, run destructive recovery drills, diagnose container-readiness failures, package the plugin, and execute the test matrix.
+
+The human made the key product decisions: recovery must be demonstrated rather than promised; agents must consume the same MCP and skill contract; PostgreSQL cascades require a full-database artifact; approval must occur outside the coding-agent session; and unsupported effects must remain blocked rather than receive a fake safety guarantee. The submission's Codex `/feedback` session ID and dated commit history provide the authoritative GPT-5.6/Codex build trace.
 
 ## License
 

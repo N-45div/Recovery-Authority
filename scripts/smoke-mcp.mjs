@@ -36,6 +36,39 @@ function runGit(args) {
   return result.stdout.trim();
 }
 
+async function approve(preparedOutput) {
+  assert.equal(preparedOutput.authorization.status, "pending");
+  assert.equal(preparedOutput.authorization.capability, null);
+  assert.match(preparedOutput.authorization.approvalCommand, /approve-operation\.sh/);
+  assert.equal("capability" in preparedOutput, false);
+  const result = spawnSync(
+    "bash",
+    [
+      join(pluginRoot, "scripts", "approve-operation.sh"),
+      preparedOutput.operation.id,
+      "--data-dir",
+      dataDir,
+    ],
+    {
+      encoding: "utf8",
+      input: `${preparedOutput.operation.proofDigest.slice(0, 12)}\n`,
+      env: {
+        ...process.env,
+        PLUGIN_ROOT: pluginRoot,
+        RECOVERY_AUTHORITY_ALLOW_NONINTERACTIVE_APPROVAL: "1",
+      },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const authorization = await client.callTool({
+    name: "recovery_get_authorization",
+    arguments: { operationId: preparedOutput.operation.id },
+  });
+  assert.equal(authorization.structuredContent.status, "approved");
+  assert.ok(authorization.structuredContent.capability);
+  return authorization.structuredContent.capability;
+}
+
 runBun(`
   import { Database } from "bun:sqlite";
   const db = new Database(process.env.DATABASE_PATH);
@@ -66,6 +99,7 @@ try {
       "recovery_commit_git_reset_hard",
       "recovery_commit_postgres_mutation",
       "recovery_commit_sqlite_mutation",
+      "recovery_get_authorization",
       "recovery_get_operation",
       "recovery_prepare_filesystem_delete",
       "recovery_prepare_git_reset_hard",
@@ -101,12 +135,13 @@ try {
   });
   const preparedOutput = prepared.structuredContent;
   assert.equal(preparedOutput.operation.status, "proven");
+  const filesystemCapability = await approve(preparedOutput);
 
   await client.callTool({
     name: "recovery_commit_filesystem_delete",
     arguments: {
       operationId: preparedOutput.operation.id,
-      capability: preparedOutput.capability,
+      capability: filesystemCapability,
     },
   });
   await assert.rejects(readFile(join(workspace, "state.txt"), "utf8"));
@@ -129,11 +164,12 @@ try {
       ttlSeconds: 300,
     },
   });
+  const sqliteCapability = await approve(sqlitePrepared.structuredContent);
   await client.callTool({
     name: "recovery_commit_sqlite_mutation",
     arguments: {
       operationId: sqlitePrepared.structuredContent.operation.id,
-      capability: sqlitePrepared.structuredContent.capability,
+      capability: sqliteCapability,
       sql,
     },
   });
@@ -175,11 +211,12 @@ try {
       ttlSeconds: 300,
     },
   });
+  const gitCapability = await approve(gitPrepared.structuredContent);
   await client.callTool({
     name: "recovery_commit_git_reset_hard",
     arguments: {
       operationId: gitPrepared.structuredContent.operation.id,
-      capability: gitPrepared.structuredContent.capability,
+      capability: gitCapability,
     },
   });
   assert.equal(await readFile(join(workspace, "state.txt"), "utf8"), "recover me");

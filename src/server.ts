@@ -13,6 +13,7 @@ import {
   PrepareSqliteMutationInput,
   RestorePostgresMutationInput,
 } from "./contracts.js";
+import { ApprovalBroker } from "./approval.js";
 import { CapabilitySigner } from "./crypto.js";
 import { FilesystemRecoveryService } from "./filesystem.js";
 import { GitRecoveryService } from "./git.js";
@@ -21,18 +22,33 @@ import { SqliteRecoveryService } from "./sqlite.js";
 import { OperationStore } from "./store.js";
 
 const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+const pluginRoot = resolve(process.env.PLUGIN_ROOT ?? ".");
 const store = new OperationStore(dataDir);
 const signer = await CapabilitySigner.load(dataDir);
+const approvals = new ApprovalBroker(dataDir, store, signer);
 const filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
 const gitService = new GitRecoveryService(dataDir, store, signer);
 const postgresService = new PostgresRecoveryService(dataDir, store, signer);
 const sqliteService = new SqliteRecoveryService(dataDir, store, signer);
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function authorizationView<T extends { operationId: string; status: string }>(authorization: T): T & { approvalCommand: string | null } {
+  return {
+    ...authorization,
+    approvalCommand: authorization.status === "pending"
+      ? `bash ${shellQuote(resolve(pluginRoot, "scripts", "approve-operation.sh"))} ${authorization.operationId} --data-dir ${shellQuote(dataDir)}`
+      : null,
+  };
+}
+
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.5.0" },
+  { name: "recovery-authority", version: "0.6.0" },
   {
     instructions:
-      "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted.",
+      "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Hook coverage applies only when the bundled hook is trusted.",
   },
 );
 
@@ -45,7 +61,11 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const result = await filesystemService.prepare(PrepareFilesystemDeleteInput.parse(input));
+    const prepared = await filesystemService.prepare(PrepareFilesystemDeleteInput.parse(input));
+    const result = {
+      operation: prepared.operation,
+      authorization: authorizationView(await approvals.request(prepared.operation)),
+    };
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result,
@@ -63,6 +83,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitFilesystemDeleteInput.parse(input);
+    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
     const operation = await filesystemService.commit(parsed.operationId, parsed.capability);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -98,7 +119,11 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const result = await gitService.prepare(PrepareGitResetHardInput.parse(input));
+    const prepared = await gitService.prepare(PrepareGitResetHardInput.parse(input));
+    const result = {
+      operation: prepared.operation,
+      authorization: authorizationView(await approvals.request(prepared.operation)),
+    };
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result,
@@ -116,6 +141,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitGitResetHardInput.parse(input);
+    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
     const operation = await gitService.commit(parsed.operationId, parsed.capability);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -151,7 +177,11 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const result = await sqliteService.prepare(PrepareSqliteMutationInput.parse(input));
+    const prepared = await sqliteService.prepare(PrepareSqliteMutationInput.parse(input));
+    const result = {
+      operation: prepared.operation,
+      authorization: authorizationView(await approvals.request(prepared.operation)),
+    };
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result,
@@ -169,6 +199,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitSqliteMutationInput.parse(input);
+    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
     const operation = await sqliteService.commit(parsed.operationId, parsed.capability, parsed.sql);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -204,7 +235,11 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   async (input) => {
-    const result = await postgresService.prepare(PreparePostgresMutationInput.parse(input));
+    const prepared = await postgresService.prepare(PreparePostgresMutationInput.parse(input));
+    const result = {
+      operation: prepared.operation,
+      authorization: authorizationView(await approvals.request(prepared.operation)),
+    };
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result,
@@ -222,6 +257,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitPostgresMutationInput.parse(input);
+    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
     const operation = await postgresService.commit(parsed.operationId, parsed.capability, parsed.connectionUri, parsed.sql);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -244,6 +280,24 @@ server.registerTool(
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
       structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_get_authorization",
+  {
+    title: "Read human authorization",
+    description: "Read whether a restore-tested operation is pending, approved, or expired. The proof-bound capability is returned only after separate human approval.",
+    inputSchema: OperationInput.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = OperationInput.parse(input);
+    const authorization = authorizationView(await approvals.get(parsed.operationId));
+    return {
+      content: [{ type: "text", text: JSON.stringify(authorization, null, 2) }],
+      structuredContent: authorization,
     };
   },
 );

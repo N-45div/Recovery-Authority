@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -14,7 +15,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Tabs, Wrap},
 };
-use recovery_core::{HookEvent, OperationLedger, RecoveryStatus};
+use recovery_core::{
+    AuthorizationRecord, AuthorizationStatus, HookEvent, OperationLedger, RecoveryStatus,
+};
 
 const TAB_NAMES: [&str; 5] = ["MISSION", "EFFECTS", "RECOVERY", "AUTHORITY", "RECEIPTS"];
 
@@ -109,6 +112,19 @@ fn read_hook_events(data_dir: &Path) -> Vec<HookEvent> {
         .unwrap_or_default()
 }
 
+fn read_authorizations(data_dir: &Path) -> BTreeMap<String, AuthorizationRecord> {
+    fs::read_dir(data_dir.join("approvals"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+                .filter_map(|content| serde_json::from_str::<AuthorizationRecord>(&content).ok())
+                .map(|record| (record.operation_id.clone(), record))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn render(frame: &mut Frame, app: &App) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
@@ -136,7 +152,8 @@ fn render(frame: &mut Frame, app: &App) {
 
     let operations = read_operations(&app.data_dir);
     let hook_events = read_hook_events(&app.data_dir);
-    let (title, lines) = tab_content(app.selected_tab, &operations, &hook_events);
+    let authorizations = read_authorizations(&app.data_dir);
+    let (title, lines) = tab_content(app.selected_tab, &operations, &hook_events, &authorizations);
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL).title(title))
@@ -153,19 +170,21 @@ fn tab_content(
     selected_tab: usize,
     ledger: &OperationLedger,
     events: &[HookEvent],
+    authorizations: &BTreeMap<String, AuthorizationRecord>,
 ) -> (&'static str, Vec<Line<'static>>) {
     match selected_tab {
-        0 => mission_lines(ledger, events),
+        0 => mission_lines(ledger, events, authorizations),
         1 => effect_lines(events),
-        2 => recovery_lines(ledger),
+        2 => recovery_lines(ledger, authorizations),
         3 => authority_lines(),
-        _ => receipt_lines(ledger, events),
+        _ => receipt_lines(ledger, events, authorizations),
     }
 }
 
 fn mission_lines(
     ledger: &OperationLedger,
     events: &[HookEvent],
+    authorizations: &BTreeMap<String, AuthorizationRecord>,
 ) -> (&'static str, Vec<Line<'static>>) {
     let blocked = events.iter().filter(|event| event.blocked).count();
     let proven = ledger
@@ -177,6 +196,14 @@ fn mission_lines(
         .operations
         .values()
         .filter(|operation| operation.status == RecoveryStatus::Recovered)
+        .count();
+    let pending = authorizations
+        .values()
+        .filter(|authorization| authorization.status == AuthorizationStatus::Pending)
+        .count();
+    let approved = authorizations
+        .values()
+        .filter(|authorization| authorization.status == AuthorizationStatus::Approved)
         .count();
     (
         " Mission status ",
@@ -190,13 +217,19 @@ fn mission_lines(
                 Span::raw(proven.to_string()),
             ]),
             Line::from(vec![
+                Span::styled("PENDING  ", Style::default().fg(Color::Yellow)),
+                Span::raw(pending.to_string()),
+            ]),
+            Line::from(vec![
+                Span::styled("APPROVED ", Style::default().fg(Color::Cyan)),
+                Span::raw(approved.to_string()),
+            ]),
+            Line::from(vec![
                 Span::styled("RECOVERED ", Style::default().fg(Color::Green)),
                 Span::raw(recovered.to_string()),
             ]),
             Line::from(""),
-            Line::from(
-                "Destructive shell effects require a restore-tested capability before execution.",
-            ),
+            Line::from("Destructive effects require a restore proof and separate human approval."),
         ],
     )
 }
@@ -227,14 +260,22 @@ fn effect_lines(events: &[HookEvent]) -> (&'static str, Vec<Line<'static>>) {
     (" Intercepted effects ", lines)
 }
 
-fn recovery_lines(ledger: &OperationLedger) -> (&'static str, Vec<Line<'static>>) {
+fn recovery_lines(
+    ledger: &OperationLedger,
+    authorizations: &BTreeMap<String, AuthorizationRecord>,
+) -> (&'static str, Vec<Line<'static>>) {
     let mut operations = ledger.operations.values().collect::<Vec<_>>();
     operations.sort_by_key(|operation| std::cmp::Reverse(operation.created_at));
     let mut lines = Vec::new();
     for operation in operations.into_iter().take(10) {
+        let authorization = authorizations
+            .get(&operation.id)
+            .map(|record| format!("{:?}", record.status).to_uppercase())
+            .unwrap_or_else(|| "UNTRACKED".to_string());
         lines.push(Line::from(format!(
-            "{:?}  {}  {}",
+            "{:?}  {}  {}  {}",
             operation.status,
+            authorization,
             &operation.id[..8],
             operation.paths.join(", ")
         )));
@@ -254,6 +295,8 @@ fn authority_lines() -> (&'static str, Vec<Line<'static>>) {
             Line::from("EXACT RECOVERY   sqlite.mutate"),
             Line::from("EXACT RECOVERY   postgres.schema-mutate"),
             Line::from("EXACT RECOVERY   git.reset-hard"),
+            Line::from("HUMAN GATE       proof-bound approval"),
+            Line::from("BLOCK ONLY       authorization.approval"),
             Line::from("BLOCK ONLY       filesystem.overwrite"),
             Line::from("BLOCK ONLY       git.destructive"),
             Line::from("BLOCK ONLY       other database.destructive"),
@@ -270,6 +313,7 @@ fn authority_lines() -> (&'static str, Vec<Line<'static>>) {
 fn receipt_lines(
     ledger: &OperationLedger,
     events: &[HookEvent],
+    authorizations: &BTreeMap<String, AuthorizationRecord>,
 ) -> (&'static str, Vec<Line<'static>>) {
     let mut lines = Vec::new();
     for operation in ledger.operations.values().rev().take(8) {
@@ -278,6 +322,15 @@ fn receipt_lines(
             &operation.id[..8],
             operation.proof_digest
         )));
+    }
+    for authorization in authorizations.values().rev().take(8) {
+        if let Some(digest) = &authorization.approval_digest {
+            lines.push(Line::from(format!(
+                "APPROVAL {}  {}",
+                &authorization.operation_id[..8],
+                digest
+            )));
+        }
     }
     for event in events.iter().rev().take(8) {
         if let Some(digest) = &event.command_digest {

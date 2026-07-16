@@ -14728,6 +14728,9 @@ function classifyWords(input) {
   const args2 = words.slice(1);
   if (!executable)
     return [];
+  if (executable === "approve-operation.sh" || executable === "recovery-authority-approve" || ["bash", "sh", "zsh", "dash", "bun", "node"].includes(executable) && args2.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg))) {
+    return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
+  }
   if (["rm", "unlink", "shred", "rmdir"].includes(executable)) {
     return [finding("filesystem.delete", executable, `${executable} removes filesystem state`)];
   }
