@@ -1,8 +1,37 @@
 # Recovery Authority
 
-Recovery Authority is a Codex plugin that requires a demonstrated inverse capability and separate human approval before granting a destructive forward capability.
+**Recovery-backed authorization for coding agents.**
 
-Instead of asking only whether an agent is allowed to run a command, it asks whether the exact affected state has already been restored successfully. The resulting proof, scope, expected post-state, human approval, and expiry are bound into a short-lived signed capability.
+Recovery Authority is an open-source Codex plugin and agent runtime that refuses to grant destructive authority until the exact affected state has been restored successfully in an isolated drill. A separate human approval then releases one short-lived capability bound to that proof, scope, expected result, and expiry.
+
+> The product contract is simple: no destructive authority without demonstrated recovery.
+
+## The problem
+
+Coding agents now run long tasks, delegate work, modify databases, and execute cleanup commands while developers are focused elsewhere. Existing controls leave four practical gaps:
+
+1. **Approval asks about intent, not recoverability.** A developer sees a command but cannot know whether its complete blast radius can be reversed.
+2. **Full-access mistakes cross boundaries quickly.** A bad path, mutable `$HOME`, cascade, volume purge, or hidden child process can turn one cleanup step into permanent loss.
+3. **Backups are promises until restored.** A stale, incomplete, or inaccessible backup does not prove that the exact operation is recoverable now.
+4. **Subagents multiply execution paths.** Native subagents, scripts, interpreters, and package hooks can perform the same destructive effect through different commands.
+
+This affects developers using autonomous coding agents, platform teams enabling agent workflows, and security teams responsible for developer machines, source repositories, and development databases.
+
+## What changes
+
+Recovery Authority governs the **effect**, not the model's explanation or one command spelling:
+
+| Existing control | What it does well | Remaining gap | Recovery Authority |
+| --- | --- | --- | --- |
+| Sandbox | Contains host access | The selected workspace is still writable | Requires proof and approval for recognized destructive workspace effects |
+| Approval prompt | Keeps a human in the loop | Humans must predict reversibility from intent | Shows an already-tested recovery proof before approval |
+| Backup | Preserves a previous copy | Restore may be stale, incomplete, or untested | Restores the exact artifact in isolation before authority exists |
+| Command denylist | Blocks known syntax | Wrappers, interpreters, and subagents change syntax | Parses effects and applies actor-independent enforcement |
+| Audit log | Explains what happened | Evidence arrives after damage | Produces proof and authorization receipts before commit |
+
+The immediate value is safer long-horizon autonomy with less blind approval: developers can delegate more work, while teams retain a concrete artifact, proof digest, human decision, state witness, and recovery path.
+
+## How it works
 
 ```text
 agent + descendants (read-only host, writable repo)
@@ -15,15 +44,40 @@ authority daemon (outside sandbox, public-key verification only)
 proof-bound capability -> guarded commit -> receipt -> exact restore
 ```
 
-## Run the complete demo
+The model-facing MCP bundle contains verification code but no signing implementation. The private Ed25519 key is loaded only by the separate terminal approval path. The Linux runner keeps the authority daemon, ledger, artifacts, and signing directory outside the agent's mount namespace.
 
-With Bun, Docker, and the retained `postgres:17-alpine` image available:
+## Five-minute judge path
+
+This path uses bundled `dist/` artifacts, creates its own sample data, and does not rebuild the project. Requirements are Bun 1.3+ and Docker; Docker can pull `postgres:17-alpine` on first use.
 
 ```bash
 bun run demo
 ```
 
-The command launches a disposable PostgreSQL database, seeds `public` and `audit` schemas, proves recovery in an isolated drill database, pauses for a human proof confirmation, commits a deletion with a cross-schema cascade, restores both schemas, verifies their witnesses, and removes the container. It runs the bundled `dist/` artifacts and does not rebuild the plugin.
+The demo:
+
+1. Launches a disposable PostgreSQL database and seeds `public` and `audit` schemas.
+2. Creates a full-database recovery artifact and restores it into an isolated drill database.
+3. Executes the exact deletion in the drill and records the expected post-state witness.
+4. Pauses for a separate human proof-prefix confirmation.
+5. Commits a deletion whose foreign-key cascade crosses schemas.
+6. Restores both schemas, verifies their original witnesses, and removes the container.
+
+Expected final line:
+
+```text
+Demo complete: proof, human approval, exact commit, and verified recovery.
+```
+
+For a code-only check without Docker:
+
+```bash
+bun run test:mcp
+bun run test:hook
+bun run test:bundle
+```
+
+## Recovery adapters
 
 The filesystem adapter protects scoped deletes:
 
@@ -43,6 +97,18 @@ The PostgreSQL adapter parses one destructive statement into an AST, limits dire
 The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers. Prepare tools return a pending authorization and an exact separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
 
 The same plugin registers native subagent lifecycle hooks. Each delegated executor is logged with the parent session, agent ID, type, permission mode, model, turn, and lifecycle state, then surfaced in the TUI. Enforcement remains actor-independent because Codex does not include `agent_id` in every turn-scoped tool hook. See the [threat model](docs/THREAT_MODEL.md) for the exact trust boundaries and evidence corpus.
+
+## Users and adoption
+
+The current release is a local-first, Apache-2.0 developer tool:
+
+| User | Pain addressed | Product surface |
+| --- | --- | --- |
+| Individual developer | An autonomous session can destroy uncommitted work or local data | Codex plugin, proof approval, exact recovery, optional TUI |
+| Platform or security team | Full-access agents lack a consistent destructive-action policy | Shared MCP/skill contract, fail-closed adapters, evidence ledger |
+| Agent harness builder | Every agent reinvents command checks and approval UX | Portable typed authority boundary and verifier-only MCP worker |
+
+The open-source runtime is the adoption wedge. A production team offering can build on the same protocol with centralized policy, remote or hardware-backed signing, managed artifact retention, organization-wide receipts, and SIEM/compliance exports. Those hosted controls are a product direction, not claims about this local release.
 
 ## Enforceable Linux boundary
 
@@ -79,17 +145,33 @@ Git hard-reset recovery rejects submodules, linked worktrees, custom hooks/conte
 
 PostgreSQL recovery accepts one parsed `DELETE`, `UPDATE`, `TRUNCATE`, `DROP TABLE`, `DROP SEQUENCE`, or `DROP INDEX` statement. Referenced relations must remain in the authorized schema. Function calls, nested queries, user or event triggers, and relevant logical publications are rejected because their effects can escape exact database recovery. The connection role needs permission to create and drop a temporary drill database. Logical dumps protect database contents and objects, not cluster roles, tablespaces, external service effects, or already-consumed replication events. Full-database witnesses reject concurrent changes before commit and before restore; they are optimistic guards, not distributed locks.
 
-## Requirements
+## Security and data handling
 
-- macOS or Linux
+- Recovery artifacts, ledgers, public keys, and signing keys remain local by default.
+- PostgreSQL credentials are supplied per call and are not written to operation records.
+- Hook receipts store command digests and structured findings rather than raw command text.
+- The sandbox masks authority state from agents and descendants; only typed MCP operations cross the boundary.
+- Unsupported effects fail closed instead of receiving a broad or misleading safety approval.
+- Exact guarantees and residual risks are documented in [Threat model](docs/THREAT_MODEL.md).
+
+## Supported platforms
+
+| Platform | Plugin, hook, and MCP | Enforceable agent sandbox | Notes |
+| --- | --- | --- | --- |
+| Linux | Supported | Supported with `bubblewrap` and user namespaces | Fully exercised by the integration suite |
+| macOS | Supported | Not yet available | Harness-level hook and approval boundary only |
+| Windows | Not currently supported | Not available | Bash launch and identity paths require a native backend |
+
+Additional requirements:
+
 - Bun 1.3+
 - Rust 1.89+ for the optional TUI
-- Linux `bubblewrap` for the enforceable parent/subagent sandbox
 - PostgreSQL `pg_dump` and `psql` compatible with the protected server when using the PostgreSQL adapter
+- Docker only for the self-contained PostgreSQL demo and integration test
 
-## Setup
+## Installation
 
-Install the repository as a local Codex marketplace and add the plugin:
+The committed `dist/` artifacts let judges install and run the plugin without rebuilding. From the repository root:
 
 ```bash
 codex plugin marketplace add .
@@ -102,7 +184,7 @@ For the enforceable Linux mode, launch that session through `bun run sandbox` as
 
 When a prepare tool succeeds, show the returned `approvalCommand` to the user. The user runs it in a separate terminal and types the displayed 12-character proof prefix. The agent then calls `recovery_get_authorization` and can commit only with the returned approved capability.
 
-The bundled `dist/server.js` lets Codex launch the MCP server without rebuilding it. To rebuild from source or develop locally:
+To rebuild from source or develop locally:
 
 ```bash
 bun install
@@ -167,4 +249,4 @@ The human made the key product decisions: recovery must be demonstrated rather t
 
 ## License
 
-Apache-2.0
+[Apache License 2.0](LICENSE). The source may be used, modified, and distributed, including commercially, subject to the license terms. The `private` field in `package.json` only prevents accidental npm publication; it does not make the repository or license private.

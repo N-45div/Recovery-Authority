@@ -3,4 +3,5 @@
 node_modules/
 target/
 .recovery-authority/
+.internal/
 *.log
