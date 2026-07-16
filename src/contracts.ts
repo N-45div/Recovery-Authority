@@ -15,6 +15,19 @@ export const CommitFilesystemDeleteInput = OperationInput.extend({
   capability: z.string().min(1),
 });
 
+export const PrepareSqliteMutationInput = z.object({
+  workspaceRoot: z.string().min(1).describe("Absolute path to the authorized workspace root"),
+  databasePath: z.string().min(1).describe("Workspace-relative path to an existing SQLite database"),
+  sql: z.string().min(1).max(100_000).describe("Exact destructive SQL to restore-test and authorize"),
+  reason: z.string().min(1).max(500),
+  ttlSeconds: z.number().int().min(30).max(900).default(300),
+});
+
+export const CommitSqliteMutationInput = OperationInput.extend({
+  capability: z.string().min(1),
+  sql: z.string().min(1).max(100_000),
+});
+
 export const FileRecord = z.object({
   path: z.string(),
   kind: z.enum(["file", "directory", "symlink"]),
@@ -23,15 +36,13 @@ export const FileRecord = z.object({
   symlinkTarget: z.string().nullable(),
 });
 
-export const RecoveryOperation = z.object({
+const RecoveryOperationBase = z.object({
   id: z.string().uuid(),
-  kind: z.literal("filesystem.delete"),
   status: z.enum(["proven", "committed", "recovered", "expired", "failed"]),
   workspaceRoot: z.string(),
   paths: z.array(z.string()),
   reason: z.string(),
   artifactDir: z.string(),
-  records: z.array(FileRecord),
   stateWitness: z.string(),
   proofDigest: z.string(),
   createdAt: z.string(),
@@ -41,6 +52,27 @@ export const RecoveryOperation = z.object({
   failure: z.string().nullable(),
 });
 
+export const FilesystemRecoveryOperation = RecoveryOperationBase.extend({
+  kind: z.literal("filesystem.delete"),
+  records: z.array(FileRecord),
+});
+
+export const SqliteRecoveryOperation = RecoveryOperationBase.extend({
+  kind: z.literal("sqlite.mutate"),
+  databasePath: z.string(),
+  statementDigest: z.string(),
+  integrityCheck: z.literal("ok"),
+  postCommitWitness: z.string().nullable(),
+});
+
+export const RecoveryOperation = z.discriminatedUnion("kind", [
+  FilesystemRecoveryOperation,
+  SqliteRecoveryOperation,
+]);
+
 export type FileRecord = z.infer<typeof FileRecord>;
 export type RecoveryOperation = z.infer<typeof RecoveryOperation>;
+export type FilesystemRecoveryOperation = z.infer<typeof FilesystemRecoveryOperation>;
+export type SqliteRecoveryOperation = z.infer<typeof SqliteRecoveryOperation>;
 export type PrepareFilesystemDelete = z.infer<typeof PrepareFilesystemDeleteInput>;
+export type PrepareSqliteMutation = z.infer<typeof PrepareSqliteMutationInput>;

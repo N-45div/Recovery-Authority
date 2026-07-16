@@ -14620,6 +14620,14 @@ function sha256(value) {
 function base64url(value) {
   return Buffer.from(value).toString("base64url");
 }
+var CapabilityClaims = exports_external.object({
+  operationId: exports_external.string().uuid(),
+  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate"]),
+  proofDigest: exports_external.string(),
+  stateWitness: exports_external.string(),
+  statementDigest: exports_external.string().nullable().default(null),
+  expiresAt: exports_external.string().datetime()
+});
 
 class CapabilitySigner {
   privateKey;
@@ -14663,7 +14671,7 @@ class CapabilitySigner {
     const valid = verify(null, Buffer.from(payload), this.publicKey, Buffer.from(encodedSignature, "base64url"));
     if (!valid)
       throw new Error("Invalid capability signature");
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const claims = CapabilityClaims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     if (Date.parse(claims.expiresAt) <= Date.now())
       throw new Error("Capability expired");
     return claims;
@@ -14707,7 +14715,12 @@ function unwrap(words) {
   return remaining;
 }
 function finding(category, executable, reason) {
-  return { category, executable, reason, adapterAvailable: category === "filesystem.delete" };
+  return {
+    category,
+    executable,
+    reason,
+    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate"
+  };
 }
 function classifyWords(input) {
   const words = unwrap(input);
@@ -14733,6 +14746,9 @@ function classifyWords(input) {
   if (["psql", "mysql", "sqlite3", "mongosh"].includes(executable)) {
     const statement = args2.join(" ");
     if (/\b(drop|truncate|delete\s+from|alter\s+table)\b/i.test(statement)) {
+      if (executable === "sqlite3") {
+        return [finding("sqlite.mutate", executable, "sqlite3 contains a destructive database statement")];
+      }
       return [finding("database.destructive", executable, `${executable} contains a destructive database statement`)];
     }
   }
@@ -14808,8 +14824,15 @@ function evaluateHook(rawInput) {
   if (findings.length === 0)
     return { blocked: false, command, findings, output: null };
   const categories = [...new Set(findings.map((item) => item.category))];
-  const hasOnlyFilesystemDelete = findings.every((item) => item.adapterAvailable);
-  const nextStep = hasOnlyFilesystemDelete ? "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete." : "No exact recovery adapter exists for every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
+  const categorySet = new Set(categories);
+  let nextStep;
+  if (categorySet.size === 1 && categorySet.has("filesystem.delete")) {
+    nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete.";
+  } else if (categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
+    nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the returned capability with recovery_commit_sqlite_mutation.";
+  } else {
+    nextStep = "No single exact recovery adapter covers every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
+  }
   const reason = `Recovery Authority blocked this command before execution. Detected: ${categories.join(", ")}. ${nextStep}`;
   return {
     blocked: true,

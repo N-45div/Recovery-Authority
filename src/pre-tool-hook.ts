@@ -39,10 +39,15 @@ export function evaluateHook(rawInput: unknown): HookDecision {
   if (findings.length === 0) return { blocked: false, command, findings, output: null };
 
   const categories = [...new Set(findings.map((item) => item.category))];
-  const hasOnlyFilesystemDelete = findings.every((item) => item.adapterAvailable);
-  const nextStep = hasOnlyFilesystemDelete
-    ? "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete."
-    : "No exact recovery adapter exists for every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
+  const categorySet = new Set(categories);
+  let nextStep: string;
+  if (categorySet.size === 1 && categorySet.has("filesystem.delete")) {
+    nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete.";
+  } else if (categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
+    nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the returned capability with recovery_commit_sqlite_mutation.";
+  } else {
+    nextStep = "No single exact recovery adapter covers every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
+  }
   const reason = `Recovery Authority blocked this command before execution. Detected: ${categories.join(", ")}. ${nextStep}`;
 
   return {

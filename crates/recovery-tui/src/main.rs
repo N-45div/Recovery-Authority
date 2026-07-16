@@ -251,6 +251,7 @@ fn authority_lines() -> (&'static str, Vec<Line<'static>>) {
         " Authority coverage ",
         vec![
             Line::from("EXACT RECOVERY   filesystem.delete"),
+            Line::from("EXACT RECOVERY   sqlite.mutate"),
             Line::from("BLOCK ONLY       filesystem.overwrite"),
             Line::from("BLOCK ONLY       git.destructive"),
             Line::from("BLOCK ONLY       database.destructive"),

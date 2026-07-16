@@ -1,15 +1,38 @@
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const pluginRoot = process.env.PLUGIN_UNDER_TEST ?? sourceRoot;
 const workspace = await mkdtemp(join(tmpdir(), "recovery-mcp-workspace-"));
 const dataDir = await mkdtemp(join(tmpdir(), "recovery-mcp-data-"));
 await writeFile(join(workspace, "state.txt"), "recover me");
+const databasePath = join(workspace, "app.sqlite");
+const localBun = join(sourceRoot, ".tools", "bun", "bin", "bun");
+const bun = existsSync(localBun) ? localBun : "bun";
+
+function runBun(source) {
+  const result = spawnSync(bun, ["-e", source], {
+    encoding: "utf8",
+    env: { ...process.env, DATABASE_PATH: databasePath },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+runBun(`
+  import { Database } from "bun:sqlite";
+  const db = new Database(process.env.DATABASE_PATH);
+  db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)");
+  db.exec("INSERT INTO users (name) VALUES ('Ada'), ('Grace')");
+  db.close();
+`);
 
 const transport = new StdioClientTransport({
   command: "bash",
@@ -30,13 +53,20 @@ try {
     tools.tools.map((tool) => tool.name).sort(),
     [
       "recovery_commit_filesystem_delete",
+      "recovery_commit_sqlite_mutation",
       "recovery_get_operation",
       "recovery_prepare_filesystem_delete",
+      "recovery_prepare_sqlite_mutation",
       "recovery_restore_filesystem_delete",
+      "recovery_restore_sqlite_mutation",
     ],
   );
   assert.equal(
     tools.tools.find((tool) => tool.name === "recovery_commit_filesystem_delete").annotations.destructiveHint,
+    true,
+  );
+  assert.equal(
+    tools.tools.find((tool) => tool.name === "recovery_commit_sqlite_mutation").annotations.destructiveHint,
     true,
   );
 
@@ -67,6 +97,48 @@ try {
   });
   assert.equal(recovered.structuredContent.status, "recovered");
   assert.equal(await readFile(join(workspace, "state.txt"), "utf8"), "recover me");
+
+  const sql = "DELETE FROM users WHERE name = 'Grace'";
+  const sqlitePrepared = await client.callTool({
+    name: "recovery_prepare_sqlite_mutation",
+    arguments: {
+      workspaceRoot: workspace,
+      databasePath: "app.sqlite",
+      sql,
+      reason: "Exercise SQLite recovery over MCP",
+      ttlSeconds: 300,
+    },
+  });
+  await client.callTool({
+    name: "recovery_commit_sqlite_mutation",
+    arguments: {
+      operationId: sqlitePrepared.structuredContent.operation.id,
+      capability: sqlitePrepared.structuredContent.capability,
+      sql,
+    },
+  });
+  assert.equal(
+    runBun(`
+      import { Database } from "bun:sqlite";
+      const db = new Database(process.env.DATABASE_PATH, { readonly: true });
+      console.log(JSON.stringify(db.query("SELECT name FROM users ORDER BY id").all()));
+      db.close();
+    `),
+    '[{"name":"Ada"}]',
+  );
+  await client.callTool({
+    name: "recovery_restore_sqlite_mutation",
+    arguments: { operationId: sqlitePrepared.structuredContent.operation.id },
+  });
+  assert.equal(
+    runBun(`
+      import { Database } from "bun:sqlite";
+      const db = new Database(process.env.DATABASE_PATH, { readonly: true });
+      console.log(JSON.stringify(db.query("SELECT name FROM users ORDER BY id").all()));
+      db.close();
+    `),
+    '[{"name":"Ada"},{"name":"Grace"}]',
+  );
   process.stdout.write("MCP smoke test passed\n");
 } finally {
   await client.close();

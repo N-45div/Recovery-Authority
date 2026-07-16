@@ -19595,7 +19595,7 @@ class StdioServerTransport {
 }
 
 // src/server.ts
-import { resolve as resolve2 } from "path";
+import { resolve as resolve3 } from "path";
 
 // src/contracts.ts
 var PrepareFilesystemDeleteInput = exports_external.object({
@@ -19610,6 +19610,17 @@ var OperationInput = exports_external.object({
 var CommitFilesystemDeleteInput = OperationInput.extend({
   capability: exports_external.string().min(1)
 });
+var PrepareSqliteMutationInput = exports_external.object({
+  workspaceRoot: exports_external.string().min(1).describe("Absolute path to the authorized workspace root"),
+  databasePath: exports_external.string().min(1).describe("Workspace-relative path to an existing SQLite database"),
+  sql: exports_external.string().min(1).max(1e5).describe("Exact destructive SQL to restore-test and authorize"),
+  reason: exports_external.string().min(1).max(500),
+  ttlSeconds: exports_external.number().int().min(30).max(900).default(300)
+});
+var CommitSqliteMutationInput = OperationInput.extend({
+  capability: exports_external.string().min(1),
+  sql: exports_external.string().min(1).max(1e5)
+});
 var FileRecord = exports_external.object({
   path: exports_external.string(),
   kind: exports_external.enum(["file", "directory", "symlink"]),
@@ -19617,15 +19628,13 @@ var FileRecord = exports_external.object({
   sha256: exports_external.string().nullable(),
   symlinkTarget: exports_external.string().nullable()
 });
-var RecoveryOperation = exports_external.object({
+var RecoveryOperationBase = exports_external.object({
   id: exports_external.string().uuid(),
-  kind: exports_external.literal("filesystem.delete"),
   status: exports_external.enum(["proven", "committed", "recovered", "expired", "failed"]),
   workspaceRoot: exports_external.string(),
   paths: exports_external.array(exports_external.string()),
   reason: exports_external.string(),
   artifactDir: exports_external.string(),
-  records: exports_external.array(FileRecord),
   stateWitness: exports_external.string(),
   proofDigest: exports_external.string(),
   createdAt: exports_external.string(),
@@ -19634,12 +19643,21 @@ var RecoveryOperation = exports_external.object({
   recoveredAt: exports_external.string().nullable(),
   failure: exports_external.string().nullable()
 });
-
-// src/filesystem.ts
-import { chmod, cp, lstat, mkdir as mkdir3, mkdtemp, readFile as readFile3, readlink, realpath, rm, symlink } from "fs/promises";
-import { tmpdir } from "os";
-import { dirname, isAbsolute, join as join3, relative, resolve, sep } from "path";
-import { randomUUID } from "crypto";
+var FilesystemRecoveryOperation = RecoveryOperationBase.extend({
+  kind: exports_external.literal("filesystem.delete"),
+  records: exports_external.array(FileRecord)
+});
+var SqliteRecoveryOperation = RecoveryOperationBase.extend({
+  kind: exports_external.literal("sqlite.mutate"),
+  databasePath: exports_external.string(),
+  statementDigest: exports_external.string(),
+  integrityCheck: exports_external.literal("ok"),
+  postCommitWitness: exports_external.string().nullable()
+});
+var RecoveryOperation = exports_external.discriminatedUnion("kind", [
+  FilesystemRecoveryOperation,
+  SqliteRecoveryOperation
+]);
 
 // src/crypto.ts
 import { createHash, generateKeyPairSync, sign, verify } from "crypto";
@@ -19651,6 +19669,14 @@ function sha256(value) {
 function base64url2(value) {
   return Buffer.from(value).toString("base64url");
 }
+var CapabilityClaims = exports_external.object({
+  operationId: exports_external.string().uuid(),
+  kind: exports_external.enum(["filesystem.delete", "sqlite.mutate"]),
+  proofDigest: exports_external.string(),
+  stateWitness: exports_external.string(),
+  statementDigest: exports_external.string().nullable().default(null),
+  expiresAt: exports_external.string().datetime()
+});
 
 class CapabilitySigner {
   privateKey;
@@ -19694,12 +19720,18 @@ class CapabilitySigner {
     const valid = verify(null, Buffer.from(payload), this.publicKey, Buffer.from(encodedSignature, "base64url"));
     if (!valid)
       throw new Error("Invalid capability signature");
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const claims = CapabilityClaims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     if (Date.parse(claims.expiresAt) <= Date.now())
       throw new Error("Capability expired");
     return claims;
   }
 }
+
+// src/filesystem.ts
+import { chmod, cp, lstat, mkdir as mkdir3, mkdtemp, readFile as readFile3, readlink, realpath, rm, symlink } from "fs/promises";
+import { tmpdir } from "os";
+import { dirname, isAbsolute, join as join3, relative, resolve, sep } from "path";
+import { randomUUID } from "crypto";
 
 // src/store.ts
 import { mkdir as mkdir2, readFile as readFile2, rename, writeFile as writeFile2 } from "fs/promises";
@@ -19893,12 +19925,15 @@ class FilesystemRecoveryService {
         kind: operation.kind,
         proofDigest,
         stateWitness,
+        statementDigest: null,
         expiresAt: operation.expiresAt
       })
     };
   }
   async commit(operationId, capability) {
     const operation = await this.store.get(operationId);
+    if (operation.kind !== "filesystem.delete")
+      throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
     if (operation.status !== "proven")
       throw new Error(`Operation is not committable: ${operation.status}`);
     const claims = this.signer.verify(capability);
@@ -19917,6 +19952,8 @@ class FilesystemRecoveryService {
   }
   async recover(operationId) {
     const operation = await this.store.get(operationId);
+    if (operation.kind !== "filesystem.delete")
+      throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
     if (operation.status !== "committed")
       throw new Error(`Operation is not recoverable from status: ${operation.status}`);
     for (const path of operation.paths) {
@@ -19932,21 +19969,224 @@ class FilesystemRecoveryService {
     await this.store.put(recovered);
     return recovered;
   }
-  get(operationId) {
-    return this.store.get(operationId);
+  async get(operationId) {
+    const operation = await this.store.get(operationId);
+    if (operation.kind !== "filesystem.delete")
+      throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
+    return operation;
   }
 }
-async function createFilesystemRecoveryService(dataDir) {
-  const store = new OperationStore(dataDir);
-  const signer = await CapabilitySigner.load(dataDir);
-  return new FilesystemRecoveryService(dataDir, store, signer);
+
+// src/sqlite.ts
+import { Database } from "bun:sqlite";
+import { randomUUID as randomUUID2 } from "crypto";
+import { chmod as chmod2, lstat as lstat2, mkdir as mkdir4, readFile as readFile4, realpath as realpath2, rename as rename2, rm as rm2, writeFile as writeFile3 } from "fs/promises";
+import { dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+function assertInside2(root, candidate) {
+  const rel = relative2(root, candidate);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep2}`) || isAbsolute2(rel)) {
+    throw new Error(`Database path escapes or equals the workspace root: ${candidate}`);
+  }
+}
+function assertWithin2(root, candidate) {
+  const rel = relative2(root, candidate);
+  if (rel === ".." || rel.startsWith(`..${sep2}`) || isAbsolute2(rel)) {
+    throw new Error(`Database path escapes the workspace root through a symlink: ${candidate}`);
+  }
+}
+function validateMutation(sql) {
+  if (/\b(attach|detach|vacuum|pragma|begin|commit|rollback)\b/i.test(sql)) {
+    throw new Error("Transaction control, PRAGMA, ATTACH, DETACH, and VACUUM are outside the SQLite recovery adapter");
+  }
+  if (!/\b(delete\s+from|drop\s+(table|index|view|trigger)|update\s+|alter\s+table|replace\s+into)\b/i.test(sql)) {
+    throw new Error("SQL does not contain a supported destructive SQLite mutation");
+  }
+}
+function serializeDatabase(path, readonly3) {
+  const database = new Database(path, { readonly: readonly3, create: false, strict: true });
+  try {
+    return database.serialize();
+  } finally {
+    database.close();
+  }
+}
+function assertIntegrity(database) {
+  const rows = database.query("PRAGMA integrity_check").all();
+  if (rows.length !== 1 || rows[0]?.integrity_check !== "ok") {
+    throw new Error(`SQLite integrity check failed: ${JSON.stringify(rows)}`);
+  }
+}
+function drillMutation(snapshot, sql) {
+  const database = Database.deserialize(snapshot, { strict: true });
+  try {
+    const mutate = database.transaction(() => database.exec(sql));
+    mutate.immediate();
+    assertIntegrity(database);
+  } finally {
+    database.close();
+  }
+}
+
+class SqliteRecoveryService {
+  dataDir;
+  store;
+  signer;
+  constructor(dataDir, store, signer) {
+    this.dataDir = dataDir;
+    this.store = store;
+    this.signer = signer;
+  }
+  async prepare(input) {
+    validateMutation(input.sql);
+    const workspaceRoot = await realpath2(resolve2(input.workspaceRoot));
+    const databasePath = resolve2(workspaceRoot, input.databasePath);
+    assertInside2(workspaceRoot, databasePath);
+    assertWithin2(workspaceRoot, await realpath2(dirname2(databasePath)));
+    const stat = await lstat2(databasePath);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Error("SQLite database must be a regular file inside the workspace");
+    const snapshot = serializeDatabase(databasePath, true);
+    const stateWitness = sha256(snapshot);
+    drillMutation(snapshot, input.sql);
+    const id = randomUUID2();
+    const artifactDir = join4(this.dataDir, "artifacts", id);
+    await mkdir4(artifactDir, { recursive: true, mode: 448 });
+    await writeFile3(join4(artifactDir, "before.sqlite"), snapshot, { mode: 384 });
+    const artifactWitness = sha256(await readFile4(join4(artifactDir, "before.sqlite")));
+    if (artifactWitness !== stateWitness)
+      throw new Error("SQLite recovery artifact failed witness verification");
+    const createdAt = new Date;
+    const expiresAt = new Date(createdAt.getTime() + input.ttlSeconds * 1000);
+    const statementDigest = sha256(input.sql);
+    const proofDigest = sha256(JSON.stringify({
+      id,
+      kind: "sqlite.mutate",
+      stateWitness,
+      statementDigest,
+      createdAt: createdAt.toISOString()
+    }));
+    const relativeDatabasePath = relative2(workspaceRoot, databasePath);
+    const operation = {
+      id,
+      kind: "sqlite.mutate",
+      status: "proven",
+      workspaceRoot,
+      paths: [relativeDatabasePath],
+      reason: input.reason,
+      artifactDir,
+      databasePath: relativeDatabasePath,
+      stateWitness,
+      statementDigest,
+      proofDigest,
+      integrityCheck: "ok",
+      postCommitWitness: null,
+      createdAt: createdAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      committedAt: null,
+      recoveredAt: null,
+      failure: null
+    };
+    await this.store.put(operation);
+    return {
+      operation,
+      capability: this.signer.issue({
+        operationId: id,
+        kind: operation.kind,
+        proofDigest,
+        stateWitness,
+        statementDigest,
+        expiresAt: operation.expiresAt
+      })
+    };
+  }
+  async commit(operationId, capability, sql) {
+    const operation = await this.get(operationId);
+    if (operation.status !== "proven")
+      throw new Error(`Operation is not committable: ${operation.status}`);
+    const statementDigest = sha256(sql);
+    if (statementDigest !== operation.statementDigest)
+      throw new Error("SQL does not match the restore-tested statement");
+    const claims = this.signer.verify(capability);
+    if (claims.operationId !== operation.id || claims.kind !== operation.kind || claims.proofDigest !== operation.proofDigest || claims.stateWitness !== operation.stateWitness || claims.statementDigest !== operation.statementDigest) {
+      throw new Error("Capability is not bound to this SQLite recovery proof");
+    }
+    const databasePath = join4(operation.workspaceRoot, operation.databasePath);
+    const database = new Database(databasePath, { create: false, strict: true });
+    let postCommitWitness;
+    try {
+      if (sha256(database.serialize()) !== operation.stateWitness) {
+        throw new Error("Protected SQLite state changed after the recovery proof was issued");
+      }
+      const mutate = database.transaction(() => database.exec(sql));
+      mutate.immediate();
+      assertIntegrity(database);
+      postCommitWitness = sha256(database.serialize());
+    } finally {
+      database.close();
+    }
+    const committed = {
+      ...operation,
+      status: "committed",
+      postCommitWitness,
+      committedAt: new Date().toISOString()
+    };
+    await this.store.put(committed);
+    return committed;
+  }
+  async recover(operationId) {
+    const operation = await this.get(operationId);
+    if (operation.status !== "committed" || !operation.postCommitWitness) {
+      throw new Error(`Operation is not recoverable from status: ${operation.status}`);
+    }
+    const databasePath = join4(operation.workspaceRoot, operation.databasePath);
+    if (sha256(serializeDatabase(databasePath, true)) !== operation.postCommitWitness) {
+      throw new Error("SQLite recovery would overwrite state changed after the authorized mutation");
+    }
+    const snapshot = await readFile4(join4(operation.artifactDir, "before.sqlite"));
+    if (sha256(snapshot) !== operation.stateWitness)
+      throw new Error("SQLite recovery artifact witness is invalid");
+    const restored = Database.deserialize(snapshot, { readonly: true, strict: true });
+    try {
+      assertIntegrity(restored);
+    } finally {
+      restored.close();
+    }
+    const mode = (await lstat2(databasePath)).mode;
+    const temporaryPath = `${databasePath}.recovery-${operation.id}.tmp`;
+    await writeFile3(temporaryPath, snapshot, { mode: 384 });
+    await chmod2(temporaryPath, mode);
+    await Promise.all([
+      rm2(`${databasePath}-wal`, { force: true }),
+      rm2(`${databasePath}-shm`, { force: true })
+    ]);
+    await rename2(temporaryPath, databasePath);
+    if (sha256(serializeDatabase(databasePath, true)) !== operation.stateWitness) {
+      throw new Error("SQLite recovery completed but witness verification failed");
+    }
+    const recovered = {
+      ...operation,
+      status: "recovered",
+      recoveredAt: new Date().toISOString()
+    };
+    await this.store.put(recovered);
+    return recovered;
+  }
+  async get(operationId) {
+    const operation = await this.store.get(operationId);
+    if (operation.kind !== "sqlite.mutate")
+      throw new Error(`Operation is not a SQLite mutation: ${operation.kind}`);
+    return operation;
+  }
 }
 
 // src/server.ts
-var dataDir = resolve2(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
-var service = await createFilesystemRecoveryService(dataDir);
-var server = new McpServer({ name: "recovery-authority", version: "0.1.0" }, {
-  instructions: "Use Recovery Authority for destructive filesystem operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Do not claim that raw shell operations are protected."
+var dataDir = resolve3(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+var store = new OperationStore(dataDir);
+var signer = await CapabilitySigner.load(dataDir);
+var filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
+var sqliteService = new SqliteRecoveryService(dataDir, store, signer);
+var server = new McpServer({ name: "recovery-authority", version: "0.3.0" }, {
+  instructions: "Use Recovery Authority for destructive filesystem and SQLite operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted."
 });
 server.registerTool("recovery_prepare_filesystem_delete", {
   title: "Prove filesystem recovery",
@@ -19954,7 +20194,7 @@ server.registerTool("recovery_prepare_filesystem_delete", {
   inputSchema: PrepareFilesystemDeleteInput.shape,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
 }, async (input) => {
-  const result = await service.prepare(PrepareFilesystemDeleteInput.parse(input));
+  const result = await filesystemService.prepare(PrepareFilesystemDeleteInput.parse(input));
   return {
     content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     structuredContent: result
@@ -19967,7 +20207,7 @@ server.registerTool("recovery_commit_filesystem_delete", {
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
 }, async (input) => {
   const parsed = CommitFilesystemDeleteInput.parse(input);
-  const operation = await service.commit(parsed.operationId, parsed.capability);
+  const operation = await filesystemService.commit(parsed.operationId, parsed.capability);
   return {
     content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
     structuredContent: operation
@@ -19980,7 +20220,45 @@ server.registerTool("recovery_restore_filesystem_delete", {
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
 }, async (input) => {
   const parsed = OperationInput.parse(input);
-  const operation = await service.recover(parsed.operationId);
+  const operation = await filesystemService.recover(parsed.operationId);
+  return {
+    content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+    structuredContent: operation
+  };
+});
+server.registerTool("recovery_prepare_sqlite_mutation", {
+  title: "Prove SQLite mutation recovery",
+  description: "Serialize an existing SQLite database, execute the exact SQL against an isolated copy, verify integrity, and issue a short-lived capability.",
+  inputSchema: PrepareSqliteMutationInput.shape,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+}, async (input) => {
+  const result = await sqliteService.prepare(PrepareSqliteMutationInput.parse(input));
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    structuredContent: result
+  };
+});
+server.registerTool("recovery_commit_sqlite_mutation", {
+  title: "Commit proven SQLite mutation",
+  description: "Execute only the restore-tested SQL when the capability and current database witness still match.",
+  inputSchema: CommitSqliteMutationInput.shape,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+}, async (input) => {
+  const parsed = CommitSqliteMutationInput.parse(input);
+  const operation = await sqliteService.commit(parsed.operationId, parsed.capability, parsed.sql);
+  return {
+    content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+    structuredContent: operation
+  };
+});
+server.registerTool("recovery_restore_sqlite_mutation", {
+  title: "Restore committed SQLite mutation",
+  description: "Atomically restore the pre-mutation SQLite image when the post-commit database has not changed.",
+  inputSchema: OperationInput.shape,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+}, async (input) => {
+  const parsed = OperationInput.parse(input);
+  const operation = await sqliteService.recover(parsed.operationId);
   return {
     content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
     structuredContent: operation
@@ -19993,7 +20271,7 @@ server.registerTool("recovery_get_operation", {
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 }, async (input) => {
   const parsed = OperationInput.parse(input);
-  const operation = await service.get(parsed.operationId);
+  const operation = await store.get(parsed.operationId);
   return {
     content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
     structuredContent: operation

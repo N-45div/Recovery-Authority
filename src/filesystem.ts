@@ -2,7 +2,7 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, sym
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { FileRecord, PrepareFilesystemDelete, RecoveryOperation } from "./contracts.js";
+import type { FileRecord, FilesystemRecoveryOperation, PrepareFilesystemDelete } from "./contracts.js";
 import { CapabilitySigner, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
 
@@ -91,7 +91,7 @@ export class FilesystemRecoveryService {
     private readonly signer: CapabilitySigner,
   ) {}
 
-  async prepare(input: PrepareFilesystemDelete): Promise<{ operation: RecoveryOperation; capability: string }> {
+  async prepare(input: PrepareFilesystemDelete): Promise<{ operation: FilesystemRecoveryOperation; capability: string }> {
     const workspaceRoot = await realpath(resolve(input.workspaceRoot));
     const requestedPaths = [...new Set(input.paths.map((path) => path.replace(/^\.\//, "")))];
     const absolutePaths = requestedPaths.map((path) => resolve(workspaceRoot, path)).sort();
@@ -127,7 +127,7 @@ export class FilesystemRecoveryService {
     const createdAt = new Date();
     const expiresAt = new Date(createdAt.getTime() + input.ttlSeconds * 1000);
     const proofDigest = sha256(JSON.stringify({ id, stateWitness, records, createdAt: createdAt.toISOString() }));
-    const operation: RecoveryOperation = {
+    const operation: FilesystemRecoveryOperation = {
       id,
       kind: "filesystem.delete",
       status: "proven",
@@ -153,13 +153,15 @@ export class FilesystemRecoveryService {
         kind: operation.kind,
         proofDigest,
         stateWitness,
+        statementDigest: null,
         expiresAt: operation.expiresAt,
       }),
     };
   }
 
-  async commit(operationId: string, capability: string): Promise<RecoveryOperation> {
+  async commit(operationId: string, capability: string): Promise<FilesystemRecoveryOperation> {
     const operation = await this.store.get(operationId);
+    if (operation.kind !== "filesystem.delete") throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
     if (operation.status !== "proven") throw new Error(`Operation is not committable: ${operation.status}`);
     const claims = this.signer.verify(capability);
     if (
@@ -177,13 +179,14 @@ export class FilesystemRecoveryService {
     for (const path of [...operation.paths].sort((a, b) => b.length - a.length)) {
       await rm(join(operation.workspaceRoot, path), { recursive: true, force: false });
     }
-    const committed: RecoveryOperation = { ...operation, status: "committed", committedAt: new Date().toISOString() };
+    const committed: FilesystemRecoveryOperation = { ...operation, status: "committed", committedAt: new Date().toISOString() };
     await this.store.put(committed);
     return committed;
   }
 
-  async recover(operationId: string): Promise<RecoveryOperation> {
+  async recover(operationId: string): Promise<FilesystemRecoveryOperation> {
     const operation = await this.store.get(operationId);
+    if (operation.kind !== "filesystem.delete") throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
     if (operation.status !== "committed") throw new Error(`Operation is not recoverable from status: ${operation.status}`);
     for (const path of operation.paths) {
       if (await pathExists(join(operation.workspaceRoot, path))) {
@@ -193,13 +196,15 @@ export class FilesystemRecoveryService {
     await restoreRecords(join(operation.artifactDir, "payload"), operation.workspaceRoot, operation.records);
     const restoredRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join(operation.workspaceRoot, path))))).flat();
     if (witness(restoredRecords) !== operation.stateWitness) throw new Error("Recovery completed but invariant verification failed");
-    const recovered: RecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
+    const recovered: FilesystemRecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
     await this.store.put(recovered);
     return recovered;
   }
 
-  get(operationId: string): Promise<RecoveryOperation> {
-    return this.store.get(operationId);
+  async get(operationId: string): Promise<FilesystemRecoveryOperation> {
+    const operation = await this.store.get(operationId);
+    if (operation.kind !== "filesystem.delete") throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
+    return operation;
   }
 }
 

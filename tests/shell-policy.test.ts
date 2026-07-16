@@ -19,6 +19,7 @@ describe("shell policy", () => {
     ["dd if=/dev/zero of=production.db", "filesystem.overwrite"],
     ["git reset --hard HEAD", "git.destructive"],
     ["psql -c 'DROP TABLE users'", "database.destructive"],
+    ["sqlite3 app.sqlite 'DELETE FROM users'", "sqlite.mutate"],
     ["terraform destroy -auto-approve", "infrastructure.destructive"],
     ["kubectl delete namespace production", "infrastructure.destructive"],
     ["bash scripts/cleanup.sh", "opaque.execution"],

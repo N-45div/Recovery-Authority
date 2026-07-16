@@ -5,6 +5,7 @@ export type RiskCategory =
   | "filesystem.delete"
   | "filesystem.overwrite"
   | "git.destructive"
+  | "sqlite.mutate"
   | "database.destructive"
   | "infrastructure.destructive"
   | "opaque.execution";
@@ -49,7 +50,12 @@ function unwrap(words: string[]): string[] {
 }
 
 function finding(category: RiskCategory, executable: string, reason: string): RiskFinding {
-  return { category, executable, reason, adapterAvailable: category === "filesystem.delete" };
+  return {
+    category,
+    executable,
+    reason,
+    adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate",
+  };
 }
 
 function classifyWords(input: string[]): RiskFinding[] {
@@ -76,6 +82,9 @@ function classifyWords(input: string[]): RiskFinding[] {
   if (["psql", "mysql", "sqlite3", "mongosh"].includes(executable)) {
     const statement = args.join(" ");
     if (/\b(drop|truncate|delete\s+from|alter\s+table)\b/i.test(statement)) {
+      if (executable === "sqlite3") {
+        return [finding("sqlite.mutate", executable, "sqlite3 contains a destructive database statement")];
+      }
       return [finding("database.destructive", executable, `${executable} contains a destructive database statement`)];
     }
   }

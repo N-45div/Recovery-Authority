@@ -3,19 +3,27 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { resolve } from "node:path";
 import {
   CommitFilesystemDeleteInput,
+  CommitSqliteMutationInput,
   OperationInput,
   PrepareFilesystemDeleteInput,
+  PrepareSqliteMutationInput,
 } from "./contracts.js";
-import { createFilesystemRecoveryService } from "./filesystem.js";
+import { CapabilitySigner } from "./crypto.js";
+import { FilesystemRecoveryService } from "./filesystem.js";
+import { SqliteRecoveryService } from "./sqlite.js";
+import { OperationStore } from "./store.js";
 
 const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
-const service = await createFilesystemRecoveryService(dataDir);
+const store = new OperationStore(dataDir);
+const signer = await CapabilitySigner.load(dataDir);
+const filesystemService = new FilesystemRecoveryService(dataDir, store, signer);
+const sqliteService = new SqliteRecoveryService(dataDir, store, signer);
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.1.0" },
+  { name: "recovery-authority", version: "0.3.0" },
   {
     instructions:
-      "Use Recovery Authority for destructive filesystem operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Do not claim that raw shell operations are protected.",
+      "Use Recovery Authority for destructive filesystem and SQLite operations. Prepare first, inspect the restore-tested proof, and commit only with the proof-bound capability. Hook coverage applies only when the bundled hook is trusted.",
   },
 );
 
@@ -28,7 +36,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   async (input) => {
-    const result = await service.prepare(PrepareFilesystemDeleteInput.parse(input));
+    const result = await filesystemService.prepare(PrepareFilesystemDeleteInput.parse(input));
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: result,
@@ -46,7 +54,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitFilesystemDeleteInput.parse(input);
-    const operation = await service.commit(parsed.operationId, parsed.capability);
+    const operation = await filesystemService.commit(parsed.operationId, parsed.capability);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
       structuredContent: operation,
@@ -64,7 +72,60 @@ server.registerTool(
   },
   async (input) => {
     const parsed = OperationInput.parse(input);
-    const operation = await service.recover(parsed.operationId);
+    const operation = await filesystemService.recover(parsed.operationId);
+    return {
+      content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+      structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_prepare_sqlite_mutation",
+  {
+    title: "Prove SQLite mutation recovery",
+    description: "Serialize an existing SQLite database, execute the exact SQL against an isolated copy, verify integrity, and issue a short-lived capability.",
+    inputSchema: PrepareSqliteMutationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const result = await sqliteService.prepare(PrepareSqliteMutationInput.parse(input));
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_commit_sqlite_mutation",
+  {
+    title: "Commit proven SQLite mutation",
+    description: "Execute only the restore-tested SQL when the capability and current database witness still match.",
+    inputSchema: CommitSqliteMutationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = CommitSqliteMutationInput.parse(input);
+    const operation = await sqliteService.commit(parsed.operationId, parsed.capability, parsed.sql);
+    return {
+      content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
+      structuredContent: operation,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_restore_sqlite_mutation",
+  {
+    title: "Restore committed SQLite mutation",
+    description: "Atomically restore the pre-mutation SQLite image when the post-commit database has not changed.",
+    inputSchema: OperationInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = OperationInput.parse(input);
+    const operation = await sqliteService.recover(parsed.operationId);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
       structuredContent: operation,
@@ -82,7 +143,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = OperationInput.parse(input);
-    const operation = await service.get(parsed.operationId);
+    const operation = await store.get(parsed.operationId);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
       structuredContent: operation,

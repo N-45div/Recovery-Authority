@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, sign, verify } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 
 export function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
@@ -10,13 +11,16 @@ function base64url(value: Buffer | string): string {
   return Buffer.from(value).toString("base64url");
 }
 
-export interface CapabilityClaims {
-  operationId: string;
-  kind: "filesystem.delete";
-  proofDigest: string;
-  stateWitness: string;
-  expiresAt: string;
-}
+const CapabilityClaims = z.object({
+  operationId: z.string().uuid(),
+  kind: z.enum(["filesystem.delete", "sqlite.mutate"]),
+  proofDigest: z.string(),
+  stateWitness: z.string(),
+  statementDigest: z.string().nullable().default(null),
+  expiresAt: z.string().datetime(),
+});
+
+export type CapabilityClaims = z.infer<typeof CapabilityClaims>;
 
 export class CapabilitySigner {
   private constructor(
@@ -68,7 +72,7 @@ export class CapabilitySigner {
     );
     if (!valid) throw new Error("Invalid capability signature");
 
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as CapabilityClaims;
+    const claims = CapabilityClaims.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     if (Date.parse(claims.expiresAt) <= Date.now()) throw new Error("Capability expired");
     return claims;
   }
