@@ -27533,8 +27533,8 @@ async function assertSupportedRepository(repositoryRoot) {
     throw new Error("Git reset recovery requires a non-bare worktree");
   const configNames = (await runGit(repositoryRoot, ["config", "--name-only", "--list"])).split(`
 `).map((name) => name.toLowerCase());
-  if (configNames.some((name) => ["core.worktree", "core.hookspath", "core.fsmonitor"].includes(name) || /^filter\..*\.(clean|smudge|process)$/.test(name))) {
-    throw new Error("Git reset recovery refuses custom worktree, hook, fsmonitor, or content-filter configuration");
+  if (configNames.some((name) => ["core.hookspath", "core.fsmonitor"].includes(name) || /^filter\..*\.(clean|smudge|process)$/.test(name))) {
+    throw new Error("Git reset recovery refuses custom hook, fsmonitor, or content-filter configuration");
   }
   const submodules = await runGit(repositoryRoot, ["submodule", "status", "--recursive"]);
   if (submodules)

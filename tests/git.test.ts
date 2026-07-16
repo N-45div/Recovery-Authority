@@ -106,6 +106,40 @@ describe("Git reset recovery authority", () => {
     expect(await readFile(join(repository, "second.txt"), "utf8")).toBe("second commit\n");
   });
 
+  test("accepts worktree configuration that resolves to the requested repository root", async () => {
+    const repository = await createRepository();
+    const dataDir = await temporaryRoot("recovery-git-data-");
+    git(repository, ["config", "extensions.worktreeConfig", "true"]);
+    git(repository, ["config", "--worktree", "core.worktree", repository]);
+    const service = await createGitRecoveryService(dataDir);
+
+    const prepared = await service.prepare({
+      repositoryRoot: repository,
+      target: "HEAD",
+      reason: "Exercise hosted checkout configuration",
+      ttlSeconds: 300,
+    });
+
+    expect(prepared.operation.status).toBe("proven");
+  });
+
+  test("rejects worktree configuration redirected outside the requested repository", async () => {
+    const repository = await createRepository();
+    const redirectedRoot = await temporaryRoot("recovery-git-redirected-");
+    const dataDir = await temporaryRoot("recovery-git-data-");
+    git(repository, ["config", "core.worktree", redirectedRoot]);
+    const service = await createGitRecoveryService(dataDir);
+
+    expect(
+      service.prepare({
+        repositoryRoot: repository,
+        target: "HEAD",
+        reason: "Reject a redirected worktree",
+        ttlSeconds: 300,
+      }),
+    ).rejects.toThrow("repositoryRoot must be the Git worktree root");
+  });
+
   test("rejects reset when Git state changed after proof", async () => {
     const repository = await createRepository();
     const dataDir = await temporaryRoot("recovery-git-data-");

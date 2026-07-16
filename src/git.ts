@@ -126,11 +126,11 @@ async function assertSupportedRepository(repositoryRoot: string): Promise<void> 
   if (
     configNames.some(
       (name) =>
-        ["core.worktree", "core.hookspath", "core.fsmonitor"].includes(name) ||
+        ["core.hookspath", "core.fsmonitor"].includes(name) ||
         /^filter\..*\.(clean|smudge|process)$/.test(name),
     )
   ) {
-    throw new Error("Git reset recovery refuses custom worktree, hook, fsmonitor, or content-filter configuration");
+    throw new Error("Git reset recovery refuses custom hook, fsmonitor, or content-filter configuration");
   }
   const submodules = await runGit(repositoryRoot, ["submodule", "status", "--recursive"]);
   if (submodules) throw new Error("Git reset recovery does not yet support repositories with submodules");
