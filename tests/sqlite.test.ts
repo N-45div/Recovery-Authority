@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSqliteRecoveryService } from "../src/sqlite.js";
+import { authorizeOperation } from "./authorize.js";
 
 const temporaryRoots: string[] = [];
 
@@ -53,7 +54,8 @@ describe("SQLite recovery authority", () => {
     expect(prepared.operation.integrityCheck).toBe("ok");
     expect(userNames(databasePath)).toEqual(["Ada", "Grace", "Linus"]);
 
-    const committed = await service.commit(prepared.operation.id, prepared.capability, sql);
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    const committed = await service.commit(prepared.operation.id, capability, sql);
     expect(committed.status).toBe("committed");
     expect(userNames(databasePath)).toEqual(["Ada"]);
 
@@ -76,9 +78,9 @@ describe("SQLite recovery authority", () => {
       ttlSeconds: 300,
     });
 
-    expect(
-      service.commit(prepared.operation.id, prepared.capability, "DELETE FROM users"),
-    ).rejects.toThrow("does not match");
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    expect(service.commit(prepared.operation.id, capability, "DELETE FROM users"))
+      .rejects.toThrow("does not match");
     expect(userNames(databasePath)).toEqual(["Ada", "Grace", "Linus"]);
   });
 
@@ -100,7 +102,8 @@ describe("SQLite recovery authority", () => {
     database.exec("INSERT INTO users (name) VALUES ('Margaret')");
     database.close();
 
-    expect(service.commit(prepared.operation.id, prepared.capability, sql)).rejects.toThrow(
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    expect(service.commit(prepared.operation.id, capability, sql)).rejects.toThrow(
       "state changed",
     );
     expect(userNames(databasePath)).toEqual(["Ada", "Grace", "Linus", "Margaret"]);
@@ -120,7 +123,8 @@ describe("SQLite recovery authority", () => {
       reason: "Remove one user",
       ttlSeconds: 300,
     });
-    await service.commit(prepared.operation.id, prepared.capability, sql);
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    await service.commit(prepared.operation.id, capability, sql);
     const database = new Database(databasePath, { strict: true });
     database.exec("INSERT INTO users (name) VALUES ('Margaret')");
     database.close();

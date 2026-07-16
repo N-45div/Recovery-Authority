@@ -101,6 +101,7 @@ try {
       "recovery_commit_sqlite_mutation",
       "recovery_get_authorization",
       "recovery_get_operation",
+      "recovery_inspect_runtime",
       "recovery_prepare_filesystem_delete",
       "recovery_prepare_git_reset_hard",
       "recovery_prepare_postgres_mutation",
@@ -115,6 +116,13 @@ try {
     tools.tools.find((tool) => tool.name === "recovery_commit_filesystem_delete").annotations.destructiveHint,
     true,
   );
+
+  const runtime = await client.callTool({
+    name: "recovery_inspect_runtime",
+    arguments: {},
+  });
+  assert.equal(runtime.structuredContent.identity.authorityDataRoot, dataDir);
+  assert.equal(runtime.structuredContent.invariants.destructiveEffectsAreActorIndependent, true);
   assert.equal(
     tools.tools.find((tool) => tool.name === "recovery_commit_sqlite_mutation").annotations.destructiveHint,
     true,

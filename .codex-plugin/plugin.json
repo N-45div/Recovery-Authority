@@ -1,6 +1,6 @@
 {
   "name": "recovery-authority",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Require proven recovery before Codex performs destructive operations.",
   "author": {
     "name": "Recovery Authority"

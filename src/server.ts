@@ -12,6 +12,7 @@ import {
   PreparePostgresMutationInput,
   PrepareSqliteMutationInput,
   RestorePostgresMutationInput,
+  RuntimeInspectionInput,
 } from "./contracts.js";
 import { ApprovalBroker } from "./approval.js";
 import { CapabilitySigner } from "./crypto.js";
@@ -20,6 +21,7 @@ import { GitRecoveryService } from "./git.js";
 import { PostgresRecoveryService } from "./postgres.js";
 import { SqliteRecoveryService } from "./sqlite.js";
 import { OperationStore } from "./store.js";
+import { inspectRuntimeIdentity } from "./identity.js";
 
 const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
 const pluginRoot = resolve(process.env.PLUGIN_ROOT ?? ".");
@@ -45,10 +47,37 @@ function authorizationView<T extends { operationId: string; status: string }>(au
 }
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.6.0" },
+  { name: "recovery-authority", version: "0.7.0" },
   {
     instructions:
       "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Hook coverage applies only when the bundled hook is trusted.",
+  },
+);
+
+server.registerTool(
+  "recovery_inspect_runtime",
+  {
+    title: "Inspect recovery runtime boundaries",
+    description: "Report the OS account root, mutable environment root, authority data root, and any identity drift before destructive work begins.",
+    inputSchema: RuntimeInspectionInput.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async () => {
+    const identity = await inspectRuntimeIdentity(dataDir);
+    const result = {
+      identity,
+      invariants: {
+        accountRootIsNotDerivedFromHomeOnPosix:
+          process.platform === "win32" || !["windows-environment", "unresolved"].includes(identity.accountHomeSource),
+        authorityDataOutsideMutableHomeRequired: true,
+        destructiveEffectsAreActorIndependent: true,
+        nativeSubagentIdentityAvailableOnlyInLifecycleHooks: true,
+      },
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
   },
 );
 

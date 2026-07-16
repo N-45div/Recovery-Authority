@@ -338,7 +338,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
     ], connectionUri);
   }
 
-  async prepare(input: PreparePostgresMutation): Promise<{ operation: PostgresRecoveryOperation; capability: string }> {
+  async prepare(input: PreparePostgresMutation): Promise<{ operation: PostgresRecoveryOperation }> {
     const parsedUri = parseConnectionUri(input.connectionUri);
     const password = decodedPassword(parsedUri);
     if (input.reason.includes(input.connectionUri) || (password && input.reason.includes(password))) {
@@ -408,17 +408,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
       failure: null,
     };
     await this.store.put(operation);
-    return {
-      operation,
-      capability: this.signer.issue({
-        operationId: id,
-        kind: operation.kind,
-        proofDigest,
-        stateWitness,
-        statementDigest,
-        expiresAt: operation.expiresAt,
-      }),
-    };
+    return { operation };
   }
 
   async commit(operationId: string, capability: string, connectionUri: string, sql: string): Promise<PostgresRecoveryOperation> {

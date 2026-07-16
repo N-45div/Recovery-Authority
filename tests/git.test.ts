@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGitRecoveryService } from "../src/git.js";
+import { authorizeOperation } from "./authorize.js";
 
 const temporaryRoots: string[] = [];
 
@@ -58,7 +59,8 @@ describe("Git reset recovery authority", () => {
     expect(prepared.operation.status).toBe("proven");
     expect(git(repository, ["status", "--porcelain=v1"])).toBe(statusBefore);
 
-    await service.commit(prepared.operation.id, prepared.capability);
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    await service.commit(prepared.operation.id, capability);
     expect(await readFile(join(repository, "app.txt"), "utf8")).toBe("committed app\n");
     expect(await readFile(join(repository, "staged.txt"), "utf8")).toBe("committed staged\n");
     expect(await readFile(join(repository, "untracked.txt"), "utf8")).toBe("untracked state\n");
@@ -88,7 +90,8 @@ describe("Git reset recovery authority", () => {
       ttlSeconds: 300,
     });
 
-    await service.commit(prepared.operation.id, prepared.capability);
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    await service.commit(prepared.operation.id, capability);
     expect(git(repository, ["rev-parse", "HEAD"])).toBe(targetHead);
     expect(readFile(join(repository, "second.txt"), "utf8")).rejects.toThrow();
 
@@ -109,7 +112,8 @@ describe("Git reset recovery authority", () => {
     });
     await writeFile(join(repository, "app.txt"), "changed after proof\n");
 
-    expect(service.commit(prepared.operation.id, prepared.capability)).rejects.toThrow("state changed");
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    expect(service.commit(prepared.operation.id, capability)).rejects.toThrow("state changed");
     expect(await readFile(join(repository, "app.txt"), "utf8")).toBe("changed after proof\n");
   });
 
@@ -124,7 +128,8 @@ describe("Git reset recovery authority", () => {
       reason: "Discard local state",
       ttlSeconds: 300,
     });
-    await service.commit(prepared.operation.id, prepared.capability);
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    await service.commit(prepared.operation.id, capability);
     await writeFile(join(repository, "new-work.txt"), "new work after reset\n");
 
     expect(service.recover(prepared.operation.id)).rejects.toThrow("overwrite state changed");

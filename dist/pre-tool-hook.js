@@ -14694,6 +14694,9 @@ function commandWords(node) {
   const suffix = Array.isArray(node.suffix) ? node.suffix.map(text).filter((word) => Boolean(word)) : [];
   return [name, ...suffix];
 }
+function assignmentWords(node) {
+  return Array.isArray(node.prefix) ? node.prefix.map(text).filter((word) => Boolean(word)) : [];
+}
 function unwrap(words) {
   let remaining = [...words];
   while (remaining.length > 0) {
@@ -14722,12 +14725,49 @@ function finding(category, executable, reason) {
     adapterAvailable: category === "filesystem.delete" || category === "sqlite.mutate" || category === "postgres.schema-mutate" || category === "git.reset-hard"
   };
 }
-function classifyWords(input) {
+var IDENTITY_ROOTS = new Set([
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME"
+]);
+function identityAssignments(words) {
+  return words.map((word) => /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word)?.[1]).filter((name) => Boolean(name && IDENTITY_ROOTS.has(name)));
+}
+function interpreterDeletion(executable, args2) {
+  const source = args2.join(" ");
+  if (["python", "python3", "python2"].includes(executable) && /\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir)|Path\([^)]*\)\.(?:unlink|rmdir))\b/.test(source)) {
+    return [finding("filesystem.delete", executable, "embedded Python invokes a filesystem deletion API")];
+  }
+  if (["node", "bun", "deno"].includes(executable) && /\b(?:rmSync|unlinkSync|rmdirSync|fs\.(?:rm|unlink|rmdir))\b/.test(source)) {
+    return [finding("filesystem.delete", executable, "embedded JavaScript invokes a filesystem deletion API")];
+  }
+  if (["pwsh", "powershell"].includes(executable) && /\b(?:Remove-Item|Clear-Content)\b/i.test(source)) {
+    return [finding("filesystem.delete", executable, "PowerShell invokes a destructive filesystem command")];
+  }
+  if (["ruby", "ruby3"].includes(executable) && /\bFileUtils\.(?:rm_rf|rm_r|rm)\b/.test(source)) {
+    return [finding("filesystem.delete", executable, "embedded Ruby invokes a filesystem deletion API")];
+  }
+  return [];
+}
+function classifyWords(input, assignments = []) {
+  const rawExecutable = basename(input[0] ?? "").toLowerCase();
+  const rawArgs = input.slice(1);
+  const rootOverrides = identityAssignments([...assignments, ...rawExecutable === "env" ? rawArgs : []]);
   const words = unwrap(input);
   const executable = basename(words[0] ?? "").toLowerCase();
   const args2 = words.slice(1);
   if (!executable)
     return [];
+  if (rootOverrides.length > 0) {
+    return [finding("identity.root-override", executable, `command overrides protected identity root${rootOverrides.length === 1 ? "" : "s"}: ${rootOverrides.join(", ")}`)];
+  }
+  if (executable === "codex" && args2.some((arg) => ["exec", "e"].includes(arg)) || executable === "claude" && args2.some((arg) => ["-p", "--print"].includes(arg)) || executable === "opencode" && args2.includes("run")) {
+    return [finding("agent.delegate", executable, "shell-launched agents bypass native subagent lineage and lifecycle hooks")];
+  }
   if (executable === "approve-operation.sh" || executable === "recovery-authority-approve" || ["bash", "sh", "zsh", "dash", "bun", "node"].includes(executable) && args2.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg))) {
     return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
   }
@@ -14739,6 +14779,15 @@ function classifyWords(input) {
   }
   if (executable === "truncate" || executable === "dd" && args2.some((arg) => arg.startsWith("of="))) {
     return [finding("filesystem.overwrite", executable, `${executable} can irreversibly overwrite file contents`)];
+  }
+  if (executable === "tee" && !args2.includes("-a") && !args2.includes("--append")) {
+    return [finding("filesystem.overwrite", executable, "tee replaces destination contents unless append mode is explicit")];
+  }
+  if (executable === "rsync" && args2.some((arg) => arg === "--delete" || arg === "--del" || arg.startsWith("--delete-") || arg === "--remove-source-files")) {
+    return [finding("filesystem.sync-delete", executable, "rsync is configured to remove source or destination entries")];
+  }
+  if (executable === "rclone" && args2.some((arg) => ["purge", "delete", "deletefile", "rmdir", "cleanup", "sync"].includes(arg))) {
+    return [finding("remote-storage.delete", executable, "rclone operation can remove remote storage objects")];
   }
   if (executable === "git") {
     let index = 0;
@@ -14753,8 +14802,14 @@ function classifyWords(input) {
     if (subcommand === "reset" && subcommandArgs.includes("--hard")) {
       return [finding("git.reset-hard", executable, "git reset --hard discards index and worktree state")];
     }
-    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout") {
+    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout" || subcommand === "stash" && ["clear", "drop"].includes(subcommandArgs[0] ?? "") || subcommand === "reflog" && ["expire", "delete"].includes(subcommandArgs[0] ?? "") || subcommand === "branch" && subcommandArgs.some((arg) => arg === "-D") || subcommand === "push" && subcommandArgs.some((arg) => arg === "-f" || arg === "--force" || arg.startsWith("--force-with-lease"))) {
       return [finding("git.destructive", executable, `git ${subcommand} can discard uncommitted state`)];
+    }
+  }
+  if (["docker", "podman"].includes(executable)) {
+    const destructive = args2.some((arg) => arg === "prune") || args2[0] === "volume" && ["rm", "remove", "prune"].includes(args2[1] ?? "") || args2[0] === "system" && args2[1] === "prune" || args2[0] === "compose" && args2[1] === "down" && args2.some((arg) => arg === "-v" || arg === "--volumes");
+    if (destructive) {
+      return [finding("container.purge", executable, `${executable} operation can remove persistent container or volume state`)];
     }
   }
   if (["psql", "mysql", "sqlite3", "mongosh"].includes(executable)) {
@@ -14778,6 +14833,12 @@ function classifyWords(input) {
   if (["aws", "gcloud", "az"].includes(executable) && args2.some((arg) => ["delete", "remove", "rm", "terminate-instances"].includes(arg))) {
     return [finding("infrastructure.destructive", executable, `${executable} command removes remote resources`)];
   }
+  if (executable === "prisma" && args2.includes("reset") || ["rails", "rake"].includes(executable) && args2.some((arg) => /db:(?:drop|reset|purge)/.test(arg)) || executable === "manage.py" && args2.includes("flush")) {
+    return [finding("database.destructive", executable, `${executable} operation resets or purges database state`)];
+  }
+  const embeddedDeletion = interpreterDeletion(executable, args2);
+  if (embeddedDeletion.length > 0)
+    return embeddedDeletion;
   if (["sh", "bash", "zsh", "dash"].includes(executable)) {
     const commandFlag = args2.findIndex((arg) => arg === "-c" || arg === "-lc");
     const nestedCommand = commandFlag >= 0 ? args2[commandFlag + 1] : undefined;
@@ -14798,7 +14859,7 @@ function walk(value, findings) {
     return;
   const node = value;
   if (node.type === "Command")
-    findings.push(...classifyWords(commandWords(node)));
+    findings.push(...classifyWords(commandWords(node), assignmentWords(node)));
   for (const nested of Object.values(node))
     walk(nested, findings);
 }
@@ -14817,14 +14878,21 @@ function analyzeShellCommand(source) {
 
 // src/pre-tool-hook.ts
 var HookInput = exports_external.object({
-  hook_event_name: exports_external.literal("PreToolUse"),
+  hook_event_name: exports_external.enum(["PreToolUse", "SubagentStart", "SubagentStop"]),
   session_id: exports_external.string().optional(),
   turn_id: exports_external.string().optional(),
+  transcript_path: exports_external.string().nullable().optional(),
   cwd: exports_external.string(),
-  tool_name: exports_external.string(),
-  tool_input: exports_external.record(exports_external.unknown())
+  model: exports_external.string().optional(),
+  permission_mode: exports_external.string().optional(),
+  tool_name: exports_external.string().optional(),
+  tool_input: exports_external.record(exports_external.unknown()).optional(),
+  agent_id: exports_external.string().optional(),
+  agent_type: exports_external.string().optional()
 });
 function commandFrom(input) {
+  if (!input.tool_input)
+    return null;
   for (const key of ["command", "cmd"]) {
     const value = input.tool_input[key];
     if (typeof value === "string")
@@ -14832,29 +14900,54 @@ function commandFrom(input) {
   }
   return null;
 }
-function evaluateHook(rawInput) {
-  const input = HookInput.parse(rawInput);
-  const command = commandFrom(input);
-  if (!command)
-    return { blocked: false, command: null, findings: [], output: null };
-  const findings = analyzeShellCommand(command);
-  if (findings.length === 0)
-    return { blocked: false, command, findings, output: null };
+function patchFinding(category, reason) {
+  return {
+    category,
+    executable: "apply_patch",
+    reason,
+    adapterAvailable: category === "filesystem.delete"
+  };
+}
+function patchText(toolInput) {
+  for (const key of ["patch", "input", "text"]) {
+    const value = toolInput[key];
+    if (typeof value === "string")
+      return value;
+  }
+  return null;
+}
+function analyzeFileTool(toolName, toolInput) {
+  if (/^(?:apply_patch|Edit|Write)$/.test(toolName)) {
+    const patch = patchText(toolInput);
+    if (patch?.includes("*** Delete File:")) {
+      return [patchFinding("filesystem.delete", "apply_patch contains an explicit file deletion")];
+    }
+    if (patch?.includes("*** Move to:")) {
+      return [patchFinding("filesystem.overwrite", "apply_patch move can replace a destination and remove the source path")];
+    }
+    const content = toolInput.content ?? toolInput.file_text ?? toolInput.new_string ?? toolInput.new_str;
+    if (typeof content === "string" && content.length === 0) {
+      return [patchFinding("filesystem.overwrite", `${toolName} replaces existing content with an empty value`)];
+    }
+  }
+  return [];
+}
+function deny(findings, command) {
   const categories = [...new Set(findings.map((item) => item.category))];
   const categorySet = new Set(categories);
   let nextStep;
   if (categorySet.size === 1 && categorySet.has("filesystem.delete")) {
-    nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the returned capability with recovery_commit_filesystem_delete.";
+    nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the approved operation with recovery_commit_filesystem_delete.";
   } else if (categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
-    nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the returned capability with recovery_commit_sqlite_mutation.";
+    nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the approved operation with recovery_commit_sqlite_mutation.";
   } else if (categorySet.size === 1 && categorySet.has("git.reset-hard")) {
-    nextStep = "Call recovery_prepare_git_reset_hard with the repository root and target commit, then use the returned capability with recovery_commit_git_reset_hard.";
+    nextStep = "Call recovery_prepare_git_reset_hard with the repository root and target commit, then use the approved operation with recovery_commit_git_reset_hard.";
   } else if (categorySet.size === 1 && categorySet.has("postgres.schema-mutate")) {
-    nextStep = "Call recovery_prepare_postgres_mutation with the connection URI, authorized schema, and exact SQL, then use the returned capability with recovery_commit_postgres_mutation.";
+    nextStep = "Call recovery_prepare_postgres_mutation with the connection URI, authorized schema, and exact SQL, then use the approved operation with recovery_commit_postgres_mutation.";
   } else {
-    nextStep = "No single exact recovery adapter covers every detected effect. Do not bypass this hook through another shell wrapper; narrow the operation or ask the user for a supported recovery plan.";
+    nextStep = "No exact recovery adapter covers every detected effect. Do not retry through another tool, interpreter, agent, or wrapper; narrow the operation or ask the user for a supported recovery plan.";
   }
-  const reason = `Recovery Authority blocked this command before execution. Detected: ${categories.join(", ")}. ${nextStep}`;
+  const reason = `Recovery Authority blocked this effect before execution. Detected: ${categories.join(", ")}. ${nextStep}`;
   return {
     blocked: true,
     command,
@@ -14869,15 +14962,52 @@ function evaluateHook(rawInput) {
     }
   };
 }
+function evaluateHook(rawInput) {
+  const input = HookInput.parse(rawInput);
+  if (input.hook_event_name === "SubagentStart") {
+    const agentLabel = input.agent_id ?? "unknown";
+    const context = `Recovery Authority registered delegated agent ${agentLabel}. This agent receives no independent destructive authority. Destructive effects remain blocked until one exact restore-tested operation receives separate human approval.`;
+    return {
+      blocked: false,
+      command: null,
+      findings: [],
+      output: {
+        systemMessage: context,
+        hookSpecificOutput: {
+          hookEventName: "SubagentStart",
+          additionalContext: context
+        }
+      }
+    };
+  }
+  if (input.hook_event_name === "SubagentStop") {
+    return { blocked: false, command: null, findings: [], output: null };
+  }
+  const command = commandFrom(input);
+  const fileFindings = input.tool_name && input.tool_input ? analyzeFileTool(input.tool_name, input.tool_input) : [];
+  if (fileFindings.length > 0)
+    return deny(fileFindings, null);
+  if (!command)
+    return { blocked: false, command: null, findings: [], output: null };
+  const findings = analyzeShellCommand(command);
+  if (findings.length === 0)
+    return { blocked: false, command, findings, output: null };
+  return deny(findings, command);
+}
 async function recordDecision(input, decision) {
   const dataDir = resolve(process.env.PLUGIN_DATA ?? process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
   await mkdir2(dataDir, { recursive: true, mode: 448 });
   await appendFile(resolve(dataDir, "hook-events.jsonl"), `${JSON.stringify({
     timestamp: new Date().toISOString(),
+    event: input.hook_event_name,
     sessionId: input.session_id ?? null,
     turnId: input.turn_id ?? null,
+    agentId: input.agent_id ?? null,
+    agentType: input.agent_type ?? null,
+    permissionMode: input.permission_mode ?? null,
+    model: input.model ?? null,
     cwd: input.cwd,
-    toolName: input.tool_name,
+    toolName: input.tool_name ?? null,
     commandDigest: decision.command ? sha256(decision.command) : null,
     blocked: decision.blocked,
     findings: decision.findings

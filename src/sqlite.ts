@@ -63,7 +63,7 @@ export class SqliteRecoveryService {
     private readonly signer: CapabilitySigner,
   ) {}
 
-  async prepare(input: PrepareSqliteMutation): Promise<{ operation: SqliteRecoveryOperation; capability: string }> {
+  async prepare(input: PrepareSqliteMutation): Promise<{ operation: SqliteRecoveryOperation }> {
     validateMutation(input.sql);
     const workspaceRoot = await realpath(resolve(input.workspaceRoot));
     const databasePath = resolve(workspaceRoot, input.databasePath);
@@ -116,17 +116,7 @@ export class SqliteRecoveryService {
     };
     await this.store.put(operation);
 
-    return {
-      operation,
-      capability: this.signer.issue({
-        operationId: id,
-        kind: operation.kind,
-        proofDigest,
-        stateWitness,
-        statementDigest,
-        expiresAt: operation.expiresAt,
-      }),
-    };
+    return { operation };
   }
 
   async commit(operationId: string, capability: string, sql: string): Promise<SqliteRecoveryOperation> {

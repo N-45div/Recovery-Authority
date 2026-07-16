@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { FileRecord, FilesystemRecoveryOperation, PrepareFilesystemDelete } from "./contracts.js";
 import { CapabilitySigner, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
+import { assertTargetExcludesProtectedRoots, inspectRuntimeIdentity } from "./identity.js";
 
 function assertInside(root: string, candidate: string): void {
   const rel = relative(root, candidate);
@@ -94,11 +95,18 @@ export class FilesystemRecoveryService {
     private readonly signer: CapabilitySigner,
   ) {}
 
-  async prepare(input: PrepareFilesystemDelete): Promise<{ operation: FilesystemRecoveryOperation; capability: string }> {
+  async prepare(input: PrepareFilesystemDelete): Promise<{ operation: FilesystemRecoveryOperation }> {
     const workspaceRoot = await realpath(resolve(input.workspaceRoot));
     const requestedPaths = [...new Set(input.paths.map((path) => path.replace(/^\.\//, "")))];
     const absolutePaths = requestedPaths.map((path) => resolve(workspaceRoot, path)).sort();
     absolutePaths.forEach((path) => assertInside(workspaceRoot, path));
+    const identity = await inspectRuntimeIdentity(this.dataDir);
+    for (const path of absolutePaths) {
+      assertTargetExcludesProtectedRoots(path, [
+        { label: "account home", path: identity.accountHome },
+        { label: "authority data root", path: identity.authorityDataRoot },
+      ]);
+    }
     assertDisjoint(absolutePaths);
     for (const path of absolutePaths) {
       assertWithin(workspaceRoot, await realpath(dirname(path)));
@@ -149,17 +157,7 @@ export class FilesystemRecoveryService {
     };
     await this.store.put(operation);
 
-    return {
-      operation,
-      capability: this.signer.issue({
-        operationId: id,
-        kind: operation.kind,
-        proofDigest,
-        stateWitness,
-        statementDigest: null,
-        expiresAt: operation.expiresAt,
-      }),
-    };
+    return { operation };
   }
 
   async commit(operationId: string, capability: string): Promise<FilesystemRecoveryOperation> {

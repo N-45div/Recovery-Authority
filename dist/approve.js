@@ -4127,6 +4127,7 @@ var PrepareFilesystemDeleteInput = exports_external.object({
 var OperationInput = exports_external.object({
   operationId: exports_external.string().uuid()
 });
+var RuntimeInspectionInput = exports_external.object({});
 var CommitFilesystemDeleteInput = OperationInput.extend({
   capability: exports_external.string().min(1)
 });

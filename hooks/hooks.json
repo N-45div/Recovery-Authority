@@ -1,8 +1,34 @@
 {
   "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/run-pre-tool-hook.sh\"",
+            "timeout": 10,
+            "statusMessage": "Registering delegated agent authority"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/run-pre-tool-hook.sh\"",
+            "timeout": 10,
+            "statusMessage": "Closing delegated agent receipt"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
-        "matcher": "^Bash$",
+        "matcher": "^(Bash|apply_patch|Edit|Write)$",
         "hooks": [
           {
             "type": "command",

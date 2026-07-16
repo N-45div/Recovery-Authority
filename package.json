@@ -1,6 +1,6 @@
 {
   "name": "recovery-authority",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
@@ -11,6 +11,7 @@
     "check": "tsc --noEmit",
     "dev": "bun run ./src/server.ts",
     "test": "bun test",
+    "test:hook": "node ./scripts/smoke-hook.mjs",
     "test:mcp": "node ./scripts/smoke-mcp.mjs"
   },
   "dependencies": {

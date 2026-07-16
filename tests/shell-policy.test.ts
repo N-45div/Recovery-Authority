@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { evaluateHook } from "../src/pre-tool-hook.js";
+import { PURGE_VECTOR_CORPUS } from "../src/purge-vectors.js";
 import { analyzeShellCommand } from "../src/shell-policy.js";
 
 function categories(command: string): string[] {
@@ -20,13 +21,25 @@ describe("shell policy", () => {
     ["sh -c 'rm -rf ./cache'", "filesystem.delete"],
     ["truncate -s 0 production.db", "filesystem.overwrite"],
     ["dd if=/dev/zero of=production.db", "filesystem.overwrite"],
+    ["tee production.db", "filesystem.overwrite"],
+    ["HOME=/tmp/agent rm -rf $HOME", "identity.root-override"],
+    ["env HOME=/tmp/agent rm -rf /tmp/agent", "identity.root-override"],
+    ["rsync -a --delete source/ destination/", "filesystem.sync-delete"],
+    ["rclone purge remote:bucket", "remote-storage.delete"],
     ["git reset --hard HEAD", "git.reset-hard"],
     ["git -C repo reset --hard HEAD", "git.reset-hard"],
+    ["git stash clear", "git.destructive"],
+    ["git push --force origin main", "git.destructive"],
+    ["docker system prune -a --volumes --force", "container.purge"],
+    ["docker compose down -v", "container.purge"],
     ["psql -c 'DROP TABLE users'", "postgres.schema-mutate"],
     ["psql -c 'UPDATE users SET active = false'", "postgres.schema-mutate"],
     ["sqlite3 app.sqlite 'DELETE FROM users'", "sqlite.mutate"],
     ["terraform destroy -auto-approve", "infrastructure.destructive"],
     ["kubectl delete namespace production", "infrastructure.destructive"],
+    ["python3 -c 'import shutil; shutil.rmtree(target)'", "filesystem.delete"],
+    ["node -e 'require(\"fs\").rmSync(target, {recursive:true})'", "filesystem.delete"],
+    ["codex exec --full-auto 'fix it'", "agent.delegate"],
     ["bash scripts/cleanup.sh", "opaque.execution"],
   ])("detects %s", (command, expectedCategory) => {
     expect(categories(command)).toContain(expectedCategory);
@@ -84,5 +97,44 @@ describe("shell policy", () => {
 
     expect(decision.blocked).toBe(true);
     expect(JSON.stringify(decision.output)).toContain("recovery_prepare_postgres_mutation");
+  });
+
+  test.each([...PURGE_VECTOR_CORPUS])("blocks evidence corpus vector: $id", (vector) => {
+    expect(categories(vector.command)).toContain(vector.expectedCategory);
+    expect(vector.sourceUrl).toMatch(/^https:\/\//);
+  });
+
+  test("blocks explicit file deletion through apply_patch", () => {
+    const decision = evaluateHook({
+      hook_event_name: "PreToolUse",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: "/workspace",
+      tool_name: "apply_patch",
+      tool_input: { patch: "*** Begin Patch\n*** Delete File: secrets.txt\n*** End Patch" },
+    });
+
+    expect(decision.blocked).toBe(true);
+    expect(decision.findings[0]?.category).toBe("filesystem.delete");
+  });
+
+  test("registers subagents without granting destructive authority", () => {
+    const decision = evaluateHook({
+      hook_event_name: "SubagentStart",
+      session_id: "parent-session",
+      turn_id: "child-turn",
+      cwd: "/workspace",
+      agent_id: "agent-42",
+      agent_type: "worker",
+      permission_mode: "bypassPermissions",
+    });
+
+    expect(decision.blocked).toBe(false);
+    expect(decision.output).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "SubagentStart",
+      },
+    });
+    expect(JSON.stringify(decision.output)).toContain("no independent destructive authority");
   });
 });

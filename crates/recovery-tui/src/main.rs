@@ -19,7 +19,14 @@ use recovery_core::{
     AuthorizationRecord, AuthorizationStatus, HookEvent, OperationLedger, RecoveryStatus,
 };
 
-const TAB_NAMES: [&str; 5] = ["MISSION", "EFFECTS", "RECOVERY", "AUTHORITY", "RECEIPTS"];
+const TAB_NAMES: [&str; 6] = [
+    "MISSION",
+    "EFFECTS",
+    "RECOVERY",
+    "AGENTS",
+    "AUTHORITY",
+    "RECEIPTS",
+];
 
 #[derive(Parser)]
 #[command(
@@ -85,7 +92,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => app.next_tab(),
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => app.previous_tab(),
-                KeyCode::Char(value @ '1'..='5') => {
+                KeyCode::Char(value @ '1'..='6') => {
                     app.selected_tab = value.to_digit(10).unwrap_or(1) as usize - 1;
                 }
                 _ => {}
@@ -161,7 +168,7 @@ fn render(frame: &mut Frame, app: &App) {
         areas[1],
     );
     frame.render_widget(
-        Line::from("left/right navigate  1-5 jump  q/esc quit"),
+        Line::from("left/right navigate  1-6 jump  q/esc quit"),
         areas[2],
     );
 }
@@ -176,7 +183,8 @@ fn tab_content(
         0 => mission_lines(ledger, events, authorizations),
         1 => effect_lines(events),
         2 => recovery_lines(ledger, authorizations),
-        3 => authority_lines(),
+        3 => agent_lines(events),
+        4 => authority_lines(),
         _ => receipt_lines(ledger, events, authorizations),
     }
 }
@@ -205,6 +213,7 @@ fn mission_lines(
         .values()
         .filter(|authorization| authorization.status == AuthorizationStatus::Approved)
         .count();
+    let active_agents = active_agent_count(events);
     (
         " Mission status ",
         vec![
@@ -228,10 +237,64 @@ fn mission_lines(
                 Span::styled("RECOVERED ", Style::default().fg(Color::Green)),
                 Span::raw(recovered.to_string()),
             ]),
+            Line::from(vec![
+                Span::styled("AGENTS    ", Style::default().fg(Color::Magenta)),
+                Span::raw(active_agents.to_string()),
+            ]),
             Line::from(""),
             Line::from("Destructive effects require a restore proof and separate human approval."),
         ],
     )
+}
+
+fn active_agent_count(events: &[HookEvent]) -> usize {
+    let mut states = BTreeMap::new();
+    for event in events {
+        if let (Some(agent_id), Some(kind)) = (&event.agent_id, &event.event) {
+            if kind == "SubagentStart" {
+                states.insert(agent_id, true);
+            } else if kind == "SubagentStop" {
+                states.insert(agent_id, false);
+            }
+        }
+    }
+    states.values().filter(|active| **active).count()
+}
+
+fn agent_lines(events: &[HookEvent]) -> (&'static str, Vec<Line<'static>>) {
+    let mut latest = BTreeMap::new();
+    for event in events {
+        if let Some(agent_id) = &event.agent_id {
+            latest.insert(agent_id.clone(), event);
+        }
+    }
+
+    let mut lines = Vec::new();
+    for (agent_id, event) in latest.iter().rev().take(12) {
+        let status = if event.event.as_deref() == Some("SubagentStop") {
+            "STOPPED"
+        } else {
+            "ACTIVE"
+        };
+        lines.push(Line::from(format!(
+            "{}  {}  {}  {}",
+            status,
+            &agent_id[..agent_id.len().min(12)],
+            event.agent_type.as_deref().unwrap_or("unknown"),
+            event.permission_mode.as_deref().unwrap_or("unknown")
+        )));
+        lines.push(Line::from(format!(
+            "  parent={}  turn={}",
+            event.session_id.as_deref().unwrap_or("unknown"),
+            event.turn_id.as_deref().unwrap_or("unknown")
+        )));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(
+            "No delegated agents observed by lifecycle hooks.",
+        ));
+    }
+    (" Delegated executors ", lines)
 }
 
 fn effect_lines(events: &[HookEvent]) -> (&'static str, Vec<Line<'static>>) {
@@ -297,8 +360,13 @@ fn authority_lines() -> (&'static str, Vec<Line<'static>>) {
             Line::from("EXACT RECOVERY   git.reset-hard"),
             Line::from("HUMAN GATE       proof-bound approval"),
             Line::from("BLOCK ONLY       authorization.approval"),
+            Line::from("BLOCK ONLY       identity.root-override"),
+            Line::from("BLOCK ONLY       agent.delegate"),
             Line::from("BLOCK ONLY       filesystem.overwrite"),
+            Line::from("BLOCK ONLY       filesystem.sync-delete"),
             Line::from("BLOCK ONLY       git.destructive"),
+            Line::from("BLOCK ONLY       container.purge"),
+            Line::from("BLOCK ONLY       remote-storage.delete"),
             Line::from("BLOCK ONLY       other database.destructive"),
             Line::from("BLOCK ONLY       infrastructure.destructive"),
             Line::from("BLOCK ONLY       opaque.execution"),

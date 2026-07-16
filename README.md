@@ -37,11 +37,15 @@ The PostgreSQL adapter parses one destructive statement into an AST, limits dire
 
 The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers. Prepare tools return a pending authorization and an exact separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
 
+The same plugin registers native subagent lifecycle hooks. Each delegated executor is logged with the parent session, agent ID, type, permission mode, model, turn, and lifecycle state, then surfaced in the TUI. Enforcement remains actor-independent because Codex does not include `agent_id` in every turn-scoped tool hook. See the [threat model](docs/THREAT_MODEL.md) for the exact trust boundaries and evidence corpus.
+
 ## Current boundary
 
-After the user trusts the plugin hook, recognized destructive Bash calls are blocked before execution. Exact recovery is available for `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`; filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
+After the user trusts the plugin hook, recognized destructive Bash and native patch calls are blocked before execution. Exact recovery is available for `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`. Root overrides, sync deletion, container purge, remote-storage deletion, shell-launched agents, filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
 The human approval gate is a control boundary for coding agents using the trusted hook and MCP server. It is not an operating-system sandbox against arbitrary malicious code already running as the same user. Approval records and signing material are mode-restricted local files; production multi-user deployment should move signing into an OS keychain, hardware authenticator, or remote policy service.
+
+On POSIX, runtime inspection resolves the account home from the process UID through the passwd/NSS identity interfaces rather than trusting `$HOME`. Filesystem preparation refuses any target containing that account root or the authority data directory. Run `recovery_inspect_runtime` before destructive work to surface root drift and deployment warnings.
 
 SQLite recovery assumes no external process keeps writing through the restore window. State witnesses reject changes before commit and after commit, but this version does not provide a distributed database lock.
 
@@ -87,6 +91,7 @@ The repository root is the Codex plugin. Its manifest is `.codex-plugin/plugin.j
 bun test
 RECOVERY_POSTGRES_INTEGRATION=1 bun test tests/postgres.integration.test.ts
 bun run demo
+bun run test:hook
 bun run test:mcp
 bun run check
 bun run build
@@ -99,10 +104,11 @@ Run the local TUI against a plugin data directory:
 cargo run -p recovery-authority -- tui --data-dir .recovery-authority
 ```
 
-Navigate with left/right or `1`-`5`. The views show mission status, intercepted effects, recovery operations, adapter coverage, and proof receipts.
+Navigate with left/right or `1`-`6`. The views show mission status, intercepted effects, recovery operations, delegated agents, adapter coverage, and proof receipts.
 
 ## MCP tools
 
+- `recovery_inspect_runtime`
 - `recovery_prepare_filesystem_delete`
 - `recovery_commit_filesystem_delete`
 - `recovery_restore_filesystem_delete`
@@ -120,7 +126,7 @@ Navigate with left/right or `1`-`5`. The views show mission status, intercepted 
 
 ## Shell policy
 
-The hook currently detects destructive filesystem commands, destructive Git operations, destructive SQL passed to common database clients, approval-command execution, Terraform/Kubernetes/cloud deletion commands, and opaque shell-script execution. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command.
+The hook detects direct and interpreter-mediated filesystem deletion, patch-file deletion, mutable identity-root overrides, destructive Git operations, rsync/rclone deletion, container and volume purge, destructive SQL and framework resets, approval-command execution, shell-launched agents, Terraform/Kubernetes/cloud deletion, and opaque shell scripts. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command. The regression corpus preserves source URLs and expected categories without executing any destructive fixture.
 
 ## OpenAI Build Week
 

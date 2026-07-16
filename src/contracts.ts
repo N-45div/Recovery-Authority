@@ -11,6 +11,8 @@ export const OperationInput = z.object({
   operationId: z.string().uuid(),
 });
 
+export const RuntimeInspectionInput = z.object({});
+
 export const CommitFilesystemDeleteInput = OperationInput.extend({
   capability: z.string().min(1),
 });

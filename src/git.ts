@@ -148,7 +148,7 @@ export class GitRecoveryService {
     private readonly signer: CapabilitySigner,
   ) {}
 
-  async prepare(input: PrepareGitResetHard): Promise<{ operation: GitResetHardRecoveryOperation; capability: string }> {
+  async prepare(input: PrepareGitResetHard): Promise<{ operation: GitResetHardRecoveryOperation }> {
     const requestedRoot = await realpath(resolve(input.repositoryRoot));
     const repositoryRoot = await realpath(await runGit(requestedRoot, ["rev-parse", "--show-toplevel"]));
     if (repositoryRoot !== requestedRoot) throw new Error(`repositoryRoot must be the Git worktree root: ${repositoryRoot}`);
@@ -213,17 +213,7 @@ export class GitRecoveryService {
       failure: null,
     };
     await this.store.put(operation);
-    return {
-      operation,
-      capability: this.signer.issue({
-        operationId: id,
-        kind: operation.kind,
-        proofDigest,
-        stateWitness: operation.stateWitness,
-        statementDigest: null,
-        expiresAt: operation.expiresAt,
-      }),
-    };
+    return { operation };
   }
 
   async commit(operationId: string, capability: string): Promise<GitResetHardRecoveryOperation> {

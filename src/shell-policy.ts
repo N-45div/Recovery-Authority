@@ -3,13 +3,18 @@ import { basename } from "node:path";
 
 export type RiskCategory =
   | "authorization.approval"
+  | "identity.root-override"
+  | "agent.delegate"
   | "filesystem.delete"
   | "filesystem.overwrite"
+  | "filesystem.sync-delete"
   | "git.reset-hard"
   | "git.destructive"
+  | "container.purge"
   | "sqlite.mutate"
   | "postgres.schema-mutate"
   | "database.destructive"
+  | "remote-storage.delete"
   | "infrastructure.destructive"
   | "opaque.execution";
 
@@ -31,6 +36,12 @@ function commandWords(node: Record<string, unknown>): string[] {
   if (!name) return [];
   const suffix = Array.isArray(node.suffix) ? node.suffix.map(text).filter((word): word is string => Boolean(word)) : [];
   return [name, ...suffix];
+}
+
+function assignmentWords(node: Record<string, unknown>): string[] {
+  return Array.isArray(node.prefix)
+    ? node.prefix.map(text).filter((word): word is string => Boolean(word))
+    : [];
 }
 
 function unwrap(words: string[]): string[] {
@@ -65,11 +76,59 @@ function finding(category: RiskCategory, executable: string, reason: string): Ri
   };
 }
 
-function classifyWords(input: string[]): RiskFinding[] {
+const IDENTITY_ROOTS = new Set([
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+]);
+
+function identityAssignments(words: string[]): string[] {
+  return words
+    .map((word) => /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word)?.[1])
+    .filter((name): name is string => Boolean(name && IDENTITY_ROOTS.has(name)));
+}
+
+function interpreterDeletion(executable: string, args: string[]): RiskFinding[] {
+  const source = args.join(" ");
+  if (["python", "python3", "python2"].includes(executable) && /\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir)|Path\([^)]*\)\.(?:unlink|rmdir))\b/.test(source)) {
+    return [finding("filesystem.delete", executable, "embedded Python invokes a filesystem deletion API")];
+  }
+  if (["node", "bun", "deno"].includes(executable) && /\b(?:rmSync|unlinkSync|rmdirSync|fs\.(?:rm|unlink|rmdir))\b/.test(source)) {
+    return [finding("filesystem.delete", executable, "embedded JavaScript invokes a filesystem deletion API")];
+  }
+  if (["pwsh", "powershell"].includes(executable) && /\b(?:Remove-Item|Clear-Content)\b/i.test(source)) {
+    return [finding("filesystem.delete", executable, "PowerShell invokes a destructive filesystem command")];
+  }
+  if (["ruby", "ruby3"].includes(executable) && /\bFileUtils\.(?:rm_rf|rm_r|rm)\b/.test(source)) {
+    return [finding("filesystem.delete", executable, "embedded Ruby invokes a filesystem deletion API")];
+  }
+  return [];
+}
+
+function classifyWords(input: string[], assignments: string[] = []): RiskFinding[] {
+  const rawExecutable = basename(input[0] ?? "").toLowerCase();
+  const rawArgs = input.slice(1);
+  const rootOverrides = identityAssignments([...assignments, ...(rawExecutable === "env" ? rawArgs : [])]);
   const words = unwrap(input);
   const executable = basename(words[0] ?? "").toLowerCase();
   const args = words.slice(1);
   if (!executable) return [];
+
+  if (rootOverrides.length > 0) {
+    return [finding("identity.root-override", executable, `command overrides protected identity root${rootOverrides.length === 1 ? "" : "s"}: ${rootOverrides.join(", ")}`)];
+  }
+
+  if (
+    (executable === "codex" && args.some((arg) => ["exec", "e"].includes(arg))) ||
+    (executable === "claude" && args.some((arg) => ["-p", "--print"].includes(arg))) ||
+    (executable === "opencode" && args.includes("run"))
+  ) {
+    return [finding("agent.delegate", executable, "shell-launched agents bypass native subagent lineage and lifecycle hooks")];
+  }
 
   if (
     executable === "approve-operation.sh" ||
@@ -89,6 +148,15 @@ function classifyWords(input: string[]): RiskFinding[] {
   if (executable === "truncate" || (executable === "dd" && args.some((arg) => arg.startsWith("of=")))) {
     return [finding("filesystem.overwrite", executable, `${executable} can irreversibly overwrite file contents`)];
   }
+  if (executable === "tee" && !args.includes("-a") && !args.includes("--append")) {
+    return [finding("filesystem.overwrite", executable, "tee replaces destination contents unless append mode is explicit")];
+  }
+  if (executable === "rsync" && args.some((arg) => arg === "--delete" || arg === "--del" || arg.startsWith("--delete-") || arg === "--remove-source-files")) {
+    return [finding("filesystem.sync-delete", executable, "rsync is configured to remove source or destination entries")];
+  }
+  if (executable === "rclone" && args.some((arg) => ["purge", "delete", "deletefile", "rmdir", "cleanup", "sync"].includes(arg))) {
+    return [finding("remote-storage.delete", executable, "rclone operation can remove remote storage objects")];
+  }
   if (executable === "git") {
     let index = 0;
     while (index < args.length && args[index]?.startsWith("-")) {
@@ -100,8 +168,26 @@ function classifyWords(input: string[]): RiskFinding[] {
     if (subcommand === "reset" && subcommandArgs.includes("--hard")) {
       return [finding("git.reset-hard", executable, "git reset --hard discards index and worktree state")];
     }
-    if (subcommand === "clean" || subcommand === "restore" || subcommand === "checkout") {
+    if (
+      subcommand === "clean" ||
+      subcommand === "restore" ||
+      subcommand === "checkout" ||
+      (subcommand === "stash" && ["clear", "drop"].includes(subcommandArgs[0] ?? "")) ||
+      (subcommand === "reflog" && ["expire", "delete"].includes(subcommandArgs[0] ?? "")) ||
+      (subcommand === "branch" && subcommandArgs.some((arg) => arg === "-D")) ||
+      (subcommand === "push" && subcommandArgs.some((arg) => arg === "-f" || arg === "--force" || arg.startsWith("--force-with-lease")))
+    ) {
       return [finding("git.destructive", executable, `git ${subcommand} can discard uncommitted state`)];
+    }
+  }
+  if (["docker", "podman"].includes(executable)) {
+    const destructive =
+      args.some((arg) => arg === "prune") ||
+      (args[0] === "volume" && ["rm", "remove", "prune"].includes(args[1] ?? "")) ||
+      (args[0] === "system" && args[1] === "prune") ||
+      (args[0] === "compose" && args[1] === "down" && args.some((arg) => arg === "-v" || arg === "--volumes"));
+    if (destructive) {
+      return [finding("container.purge", executable, `${executable} operation can remove persistent container or volume state`)];
     }
   }
   if (["psql", "mysql", "sqlite3", "mongosh"].includes(executable)) {
@@ -125,6 +211,15 @@ function classifyWords(input: string[]): RiskFinding[] {
   if (["aws", "gcloud", "az"].includes(executable) && args.some((arg) => ["delete", "remove", "rm", "terminate-instances"].includes(arg))) {
     return [finding("infrastructure.destructive", executable, `${executable} command removes remote resources`)];
   }
+  if (
+    (executable === "prisma" && args.includes("reset")) ||
+    (["rails", "rake"].includes(executable) && args.some((arg) => /db:(?:drop|reset|purge)/.test(arg))) ||
+    (executable === "manage.py" && args.includes("flush"))
+  ) {
+    return [finding("database.destructive", executable, `${executable} operation resets or purges database state`)];
+  }
+  const embeddedDeletion = interpreterDeletion(executable, args);
+  if (embeddedDeletion.length > 0) return embeddedDeletion;
   if (["sh", "bash", "zsh", "dash"].includes(executable)) {
     const commandFlag = args.findIndex((arg) => arg === "-c" || arg === "-lc");
     const nestedCommand = commandFlag >= 0 ? args[commandFlag + 1] : undefined;
@@ -143,7 +238,7 @@ function walk(value: unknown, findings: RiskFinding[]): void {
   }
   if (!value || typeof value !== "object") return;
   const node = value as Record<string, unknown>;
-  if (node.type === "Command") findings.push(...classifyWords(commandWords(node)));
+  if (node.type === "Command") findings.push(...classifyWords(commandWords(node), assignmentWords(node)));
   for (const nested of Object.values(node)) walk(nested, findings);
 }
 

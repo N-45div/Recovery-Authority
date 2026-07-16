@@ -34,7 +34,7 @@ describe("human approval broker", () => {
     const pending = await broker.request(prepared.operation);
     expect(pending.status).toBe("pending");
     expect(pending.capability).toBeNull();
-    await expect(broker.assertAuthorized(prepared.operation.id, prepared.capability))
+    await expect(broker.assertAuthorized(prepared.operation.id, "capability-not-issued"))
       .rejects.toThrow("not approved");
     await expect(broker.approve(prepared.operation.id, "incorrect"))
       .rejects.toThrow("must match proof prefix");

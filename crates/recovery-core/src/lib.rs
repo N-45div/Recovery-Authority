@@ -67,10 +67,20 @@ pub struct HookFinding {
 #[serde(rename_all = "camelCase")]
 pub struct HookEvent {
     pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub event: Option<String>,
     pub session_id: Option<String>,
     pub turn_id: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     pub cwd: String,
-    pub tool_name: String,
+    pub tool_name: Option<String>,
     pub command_digest: Option<String>,
     pub blocked: bool,
     pub findings: Vec<HookFinding>,
@@ -98,5 +108,16 @@ mod tests {
         .expect("valid authorization record");
         assert_eq!(authorization.status, AuthorizationStatus::Approved);
         assert_eq!(authorization.approval_digest.as_deref(), Some("approval"));
+    }
+
+    #[test]
+    fn parses_subagent_lifecycle_receipt_without_a_tool_call() {
+        let event: HookEvent = serde_json::from_str(
+            r#"{"timestamp":"2026-07-16T00:00:00Z","event":"SubagentStart","sessionId":"parent","turnId":"child-turn","agentId":"worker-42","agentType":"worker","permissionMode":"bypassPermissions","model":"gpt-test","cwd":"/repo","toolName":null,"commandDigest":null,"blocked":false,"findings":[]}"#,
+        )
+        .expect("valid subagent event");
+        assert_eq!(event.event.as_deref(), Some("SubagentStart"));
+        assert_eq!(event.agent_id.as_deref(), Some("worker-42"));
+        assert_eq!(event.tool_name, None);
     }
 }

@@ -5,6 +5,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPostgresRecoveryService } from "../src/postgres.js";
+import { authorizeOperation } from "./authorize.js";
 
 const integration = process.env.RECOVERY_POSTGRES_INTEGRATION === "1" ? describe : describe.skip;
 const container = `recovery-pg-${randomUUID().slice(0, 8)}`;
@@ -101,7 +102,8 @@ integration("PostgreSQL recovery authority", () => {
     expect(databaseSql("SELECT name FROM public.users ORDER BY id")).toBe("Ada\nGrace\nLinus");
     expect(await readFile(join(dataDir, "operations.json"), "utf8")).not.toContain("recovery@127.0.0.1");
 
-    const committed = await service.commit(prepared.operation.id, prepared.capability, connectionUri, sql);
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    const committed = await service.commit(prepared.operation.id, capability, connectionUri, sql);
     expect(committed.status).toBe("committed");
     expect(committed.postCommitWitness).toBe(prepared.operation.drillPostWitness);
     expect(databaseSql("SELECT name FROM public.users ORDER BY id")).toBe("Ada\nLinus");
@@ -130,7 +132,8 @@ integration("PostgreSQL recovery authority", () => {
     });
     databaseSql("INSERT INTO audit.user_events VALUES (12, 1, 'password-change')");
 
-    await expect(service.commit(prepared.operation.id, prepared.capability, connectionUri, sql))
+    const capability = await authorizeOperation(join(temporaryRoot, "stale-data"), prepared.operation);
+    await expect(service.commit(prepared.operation.id, capability, connectionUri, sql))
       .rejects.toThrow("state changed after the recovery proof");
     expect(databaseSql("SELECT name FROM public.users ORDER BY id")).toBe("Ada\nGrace\nLinus");
   }, 60_000);
@@ -150,7 +153,8 @@ integration("PostgreSQL recovery authority", () => {
       reason: "Exercise post-commit overwrite refusal",
       ttlSeconds: 300,
     });
-    await service.commit(prepared.operation.id, prepared.capability, connectionUri, sql);
+    const capability = await authorizeOperation(join(temporaryRoot, "changed-after-data"), prepared.operation);
+    await service.commit(prepared.operation.id, capability, connectionUri, sql);
     databaseSql("INSERT INTO public.users VALUES (4, 'Margaret')");
 
     await expect(service.recover(prepared.operation.id, connectionUri))
