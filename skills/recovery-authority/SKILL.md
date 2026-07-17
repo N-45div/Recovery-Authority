@@ -7,7 +7,7 @@ description: Use when a requested coding task may delete or destructively replac
 
 Route destructive filesystem deletes, local SQLite mutations, schema-scoped PostgreSQL mutations, and Git hard resets through the Recovery Authority MCP tools.
 
-The bundled `PreToolUse` hook independently blocks recognized destructive Bash commands. Do not retry a denied command through `sudo`, `env`, `sh -c`, command substitution, a script wrapper, or another execution tool.
+The bundled `PreToolUse` hook independently blocks recognized destructive Bash and PowerShell commands. Do not retry a denied command through `sudo`, `env`, `sh -c`, PowerShell dynamic invocation, command substitution, a script wrapper, or another execution tool.
 
 ## Required workflow
 

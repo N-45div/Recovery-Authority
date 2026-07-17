@@ -34,10 +34,12 @@ The immediate value is safer long-horizon autonomy with less blind approval: dev
 ## How it works
 
 ```text
-agent + descendants (read-only host, writable repo)
-        | typed MCP over a mounted Unix socket
+agent + descendants
+        | Codex hook + typed MCP over stdio
+        | Linux: Unix socket to authority outside bubblewrap
+        | Windows: PowerShell hook + named-pipe-ready IPC
         v
-authority daemon (outside sandbox, public-key verification only)
+portable recovery control plane (public-key verification only)
         | prepare -> recovery artifact -> isolated restore drill
         | pending approval <- separate human terminal + private signing key
         v
@@ -94,7 +96,7 @@ The Git adapter snapshots `HEAD`, its symbolic ref, the raw index, tracked modif
 
 The PostgreSQL adapter parses one destructive statement into an AST, limits direct and referenced relations to an authorized schema, and takes a full logical database dump so database-local cascades are recoverable. It restores the dump into a temporary database, reproduces the original witness, executes the exact SQL there, and binds the expected post-mutation witness before issuing a capability. Live commit must produce the same witness. Connection credentials are supplied per call and are never written to the operation ledger.
 
-The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash commands into an AST and blocks recognized destructive effects before execution, including nested commands and common wrappers. Prepare tools return a pending authorization and an exact separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
+The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash with `bash-parser` and Windows commands with PowerShell's native AST parser, then blocks recognized destructive effects before execution, including nested commands and common wrappers. Prepare tools return a pending authorization and an OS-native separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
 
 The same plugin registers native subagent lifecycle hooks. Each delegated executor is logged with the parent session, agent ID, type, permission mode, model, turn, and lifecycle state, then surfaced in the TUI. Enforcement remains actor-independent because Codex does not include `agent_id` in every turn-scoped tool hook. See the [threat model](docs/THREAT_MODEL.md) for the exact trust boundaries and evidence corpus.
 
@@ -129,15 +131,15 @@ The two authority directories must be outside and disjoint from the workspace. T
 
 For direct `codex` launches, the runner automatically stages a disposable writable `CODEX_HOME`. Authentication and configuration files are copied into that temporary root; large packages, plugins, skills, rules, memories, and cache trees are read-only references. The temporary state is removed when the session exits, while the real home remains read-only.
 
-Inside the sandbox, `scripts/start-mcp.sh` becomes a stdio-to-Unix-socket proxy. Only the host authority daemon and terminal approver can write authority state; model-controlled processes cannot mount it. A second narrow socket relays sanitized hook receipts so the TUI keeps parent and subagent history without exposing the ledger. The MCP bundle contains only public verification code; the private Ed25519 key and issuer implementation live in the separate terminal approval path. Existing installations migrate a legacy private key out of the data directory without changing its public identity.
+Inside the sandbox, `dist/cli.js mcp` becomes a stdio-to-Unix-socket proxy. Only the host authority daemon and terminal approver can write authority state; model-controlled processes cannot mount it. A second narrow socket relays sanitized hook receipts so the TUI keeps parent and subagent history without exposing the ledger. The MCP bundle contains only public verification code; the private Ed25519 key and issuer implementation live in the separate terminal approval path. Existing installations migrate a legacy private key out of the data directory without changing its public identity.
 
 ## Current coverage
 
-After the user trusts the plugin hook, recognized destructive Bash and native patch calls are blocked before execution. Exact recovery is available for `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`. Root overrides, sync deletion, container purge, remote-storage deletion, shell-launched agents, filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
+After the user trusts the plugin hook, recognized destructive Bash, PowerShell, and native patch calls are blocked before execution. Exact recovery is available for `filesystem.delete` on POSIX, plus local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard` on supported hosts. Windows filesystem deletion remains block-only until ACL, alternate-stream, and reparse-point metadata can be restore-tested. Root overrides, sync deletion, container purge, remote-storage deletion, shell-launched agents, filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
 Without `bun run sandbox`, the hook and approval gate remain a harness-level control and cannot mediate arbitrary same-user binaries. In the recommended Linux mode, the operating-system boundary protects host files and authority state even when full-access mode is selected inside the nested harness. The writable repository is intentionally still editable; recognized destructive repository effects are governed by the hook and proof-bound MCP commit tools.
 
-On POSIX, runtime inspection resolves the account home from the process UID through the passwd/NSS identity interfaces rather than trusting `$HOME`. Filesystem preparation refuses any target containing that account root or the authority data directory. Run `recovery_inspect_runtime` before destructive work to surface root drift and deployment warnings.
+On POSIX, runtime inspection resolves the account home from the process UID through passwd/NSS identity interfaces rather than trusting `$HOME`. On Windows it asks the OS known-folder API through a non-profile PowerShell process rather than trusting `$env:USERPROFILE`. Filesystem preparation refuses any target containing the resolved account root or authority data directory. Run `recovery_inspect_runtime` or `bun dist/cli.js doctor` to surface deployment boundaries.
 
 SQLite recovery assumes no external process keeps writing through the restore window. State witnesses reject changes before commit and after commit, but this version does not provide a distributed database lock.
 
@@ -156,15 +158,18 @@ PostgreSQL recovery accepts one parsed `DELETE`, `UPDATE`, `TRUNCATE`, `DROP TAB
 
 ## Supported platforms
 
-| Platform | Plugin, hook, and MCP | Enforceable agent sandbox | Notes |
+| Platform | Plugin, hook, and MCP | Enforcement backend | Status |
 | --- | --- | --- | --- |
-| Linux | Supported | Supported with `bubblewrap` and user namespaces | Fully exercised by the integration suite |
-| macOS | Supported | Not yet available | Harness-level hook and approval boundary only |
-| Windows | Not currently supported | Not available | Bash launch and identity paths require a native backend |
+| Linux | Bun CLI, Bash AST, Unix sockets | Recovery Authority `bubblewrap` runner; Codex host sandbox also compatible | Supported; fully exercised locally |
+| macOS | Bun CLI, Bash AST, Unix sockets | Codex Seatbelt host sandbox | Preview; no independent Recovery Authority sandbox backend |
+| Windows 11 | Bun CLI, `commandWindows`, native PowerShell AST, named-pipe-ready IPC | Codex native Windows sandbox | Preview; PowerShell parser exercised through Windows PowerShell, clean-host end-to-end smoke still required |
+
+Platform-agnostic means one proof, approval, capability, ledger, MCP, and TUI protocol with OS-native command parsing, identity, path, IPC, and containment adapters. It does not mean emulating Linux security primitives on every host.
 
 Additional requirements:
 
 - Bun 1.3+
+- Windows PowerShell 5.1+ on Windows
 - Rust 1.89+ for the optional TUI
 - PostgreSQL `pg_dump` and `psql` compatible with the protected server when using the PostgreSQL adapter
 - Docker only for the self-contained PostgreSQL demo and integration test
@@ -200,7 +205,7 @@ bun run build
 cargo build --release -p recovery-authority
 ```
 
-The PostgreSQL adapter defaults to `pg_dump` and `psql` on `PATH`. Override them for a managed installation or container wrapper with `RECOVERY_AUTHORITY_PG_DUMP` and `RECOVERY_AUTHORITY_PSQL`. `RECOVERY_AUTHORITY_MAX_DUMP_BYTES` defaults to 512 MiB, and `RECOVERY_AUTHORITY_POSTGRES_TIMEOUT_MS` defaults to 120 seconds.
+The PostgreSQL adapter defaults to `pg_dump` and `psql` on `PATH`. Override them with `RECOVERY_AUTHORITY_PG_DUMP` and `RECOVERY_AUTHORITY_PSQL`. Structured wrapper arguments can be supplied without shell parsing through `RECOVERY_AUTHORITY_PG_DUMP_ARGS_JSON` and `RECOVERY_AUTHORITY_PSQL_ARGS_JSON`. `RECOVERY_AUTHORITY_MAX_DUMP_BYTES` defaults to 512 MiB, and `RECOVERY_AUTHORITY_POSTGRES_TIMEOUT_MS` defaults to 120 seconds.
 
 For local development, replace the GitHub marketplace source with `codex plugin marketplace add .` from the repository root. The repository root is the Codex plugin, its manifest is `.codex-plugin/plugin.json`, and `.mcp.json` launches the bundled stdio MCP server.
 
@@ -247,11 +252,11 @@ Navigate with left/right or `1`-`6`. The views show mission status, intercepted 
 
 ## Shell policy
 
-The hook detects direct and interpreter-mediated filesystem deletion, patch-file deletion, mutable identity-root overrides, destructive Git operations, rsync/rclone deletion, container and volume purge, destructive SQL and framework resets, approval-command execution, shell-launched agents, Terraform/Kubernetes/cloud deletion, and opaque shell scripts. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command. The regression corpus preserves source URLs and expected categories without executing any destructive fixture.
+The hook detects direct and interpreter-mediated filesystem deletion, patch-file deletion, mutable identity-root overrides, destructive Git operations, rsync/rclone deletion, container and volume purge, destructive SQL and framework resets, approval-command execution, shell-launched agents, Terraform/Kubernetes/cloud deletion, PowerShell dynamic invocation, Windows disk/volume commands, and opaque scripts. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command. The regression corpus preserves source URLs and expected categories without executing destructive fixtures.
 
 ## OpenAI Build Week
 
-This project was built with Codex during the official submission period. Codex was used to research the agent-safety problem, challenge the initial CLI-only design, implement the Bun MCP server and Rust TUI, build the Bash AST hook, design the proof-bound capability contracts, write the PostgreSQL adapter, run destructive recovery drills, diagnose container-readiness failures, package the plugin, and execute the test matrix.
+This project was built with Codex during the official submission period. Codex was used to research the agent-safety problem, challenge the initial CLI-only design, implement the Bun MCP server and Rust TUI, build Bash and PowerShell AST hooks, design the proof-bound capability contracts, create platform adapters, write the PostgreSQL adapter, run destructive recovery drills, diagnose runtime failures, package the plugin, and execute the test matrix.
 
 The human made the key product decisions: recovery must be demonstrated rather than promised; agents must consume the same MCP and skill contract; PostgreSQL cascades require a full-database artifact; approval must occur outside the coding-agent session; and unsupported effects must remain blocked rather than receive a fake safety guarantee. The submission's Codex `/feedback` session ID and dated commit history provide the authoritative GPT-5.6/Codex build trace.
 

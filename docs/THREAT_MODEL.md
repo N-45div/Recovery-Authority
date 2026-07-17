@@ -19,7 +19,7 @@ No model actor is trusted to classify its own command as safe. A destructive eff
 2. **Recovery precedes authority.** An adapter must restore its artifact in isolation before approval can be requested.
 3. **Only the approval broker mints forward capabilities.** Prepare paths never create a valid capability.
 4. **Authority is not inherited as a broad permission.** A parent or child can only submit the exact approved operation; a subagent does not receive a reusable destructive grant.
-5. **Mutable environment roots are not identity roots.** On POSIX, the account home is resolved from the UID through the local passwd database, NSS, or the BSD identity interface, independently of `$HOME`.
+5. **Mutable environment roots are not identity roots.** On POSIX, the account home is resolved from the UID through the local passwd database, NSS, or the BSD identity interface. On Windows, the user profile is resolved through the OS known-folder API. `$HOME` and `$env:USERPROFILE` remain untrusted inputs.
 6. **The recovery authority protects itself.** A filesystem operation cannot contain the authority data root or the OS account root.
 7. **State changes invalidate proof.** Every adapter re-witnesses protected state before commit and refuses recovery over later live changes.
 8. **Unknown effects fail closed.** Unsupported, mixed, indirect, or opaque destructive effects remain blocked.
@@ -72,11 +72,13 @@ The root filesystem is mounted read-only and the selected repository is rebound 
 - Plugin hooks must be reviewed and trusted. Disabling hooks or using an uninstrumented tool removes interception.
 - `SubagentStart` can inject context but cannot prevent a subagent from starting. Shell-launched agents are blocked when recognized, not comprehensively discovered.
 - Direct plugin mode cannot mediate arbitrary already-running same-user binaries. Use the Linux sandbox runner when the harness or its descendants are not trusted with host write access.
-- The enforceable runner currently targets Linux with `bubblewrap`. macOS and Windows still use harness-level interception until native backends are implemented.
+- The independent authority runner targets Linux with `bubblewrap`. macOS and Windows use harness-level interception plus the Codex host sandbox; Recovery Authority does not claim those host sandboxes as its own isolation implementation.
 - The selected workspace is writable by design. The sandbox contains its blast radius; hook interception and recovery capabilities govern destructive effects within that workspace.
 - The Unix socket is an availability boundary, not a secret. A sandboxed process can disconnect its own proxy, but direct socket access exposes only the same typed MCP methods and no signing operation.
 - Hook lifecycle records are operational telemetry, not cryptographic actor attestations. A process inside the sandbox can forge or suppress its own audit-socket events; recovery operations, approvals, and capabilities remain authority-owned.
 - POSIX account-home attestation uses `/etc/passwd`, absolute-path `getent`, or BSD `id -P`. Environments where all three are unavailable may report the account root as unresolved and should fail deployment policy until an OS-native identity provider is configured.
+- Windows command policy depends on the native PowerShell parser. Parser startup errors, syntax errors, dynamic invocation, encoded commands, `cmd.exe` nesting, and script execution fail closed. Windows device paths and alternate data streams are rejected from recoverable workspace scopes.
+- Windows filesystem deletion is block-only because this release does not restore-test ACLs, alternate streams, and reparse-point metadata exactly.
 - The filesystem adapter witnesses contents, modes, and symlink targets. It does not yet preserve every ACL, extended attribute, sparse-file layout, hard-link relationship, or open-file semantic.
 - Local filesystem commit uses path revalidation followed by deletion, not descriptor-relative `openat2`/`unlinkat`; hostile concurrent path replacement remains outside this release's guarantee.
 - Remote infrastructure and object-storage effects are block-only because compensation is not exact recovery.

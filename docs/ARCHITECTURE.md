@@ -9,7 +9,7 @@ host
 ├── authority daemon
 │   ├── owns ledger and recovery artifacts
 │   ├── launches public-key-only MCP workers
-│   └── listens on a mode-0600 Unix socket
+│   └── Linux isolation mode listens on a mode-0600 Unix socket
 └── bubblewrap sandbox
     ├── coding harness
     ├── native subagents and hidden descendants
@@ -40,3 +40,18 @@ host
 7. The ledger records commit and recovery evidence.
 
 The MCP socket does not add a second authorization protocol. It transports the existing MCP contract across the mount boundary, keeping the model-facing plugin portable while moving durable authority out of the model process. The separate audit socket accepts bounded JSON receipts without raw command text; those receipts are useful telemetry but are not trusted as cryptographic actor identity.
+
+## Platform architecture
+
+The portable control plane is `dist/cli.js`, the MCP schema, proof and capability contracts, approval ledger, recovery adapters, and TUI. Platform adapters select:
+
+| Concern | Linux | macOS | Windows 11 |
+| --- | --- | --- | --- |
+| Hook command | POSIX shell -> Bun | POSIX shell -> Bun | `commandWindows` PowerShell -> Bun |
+| Command analysis | Bash AST | Bash AST | Native PowerShell AST |
+| Account identity | passwd/NSS | BSD identity/passwd | Windows known folder |
+| Path semantics | POSIX, case-sensitive | POSIX | Win32, case-insensitive; device/ADS rejection |
+| IPC primitive | Unix socket | Unix socket | Named pipe |
+| Containment | Independent bubblewrap runner | Codex Seatbelt host sandbox | Codex native Windows sandbox |
+
+The independent authority daemon currently ships only with the Linux bubblewrap runner. macOS and Windows use the same recovery protocol as a harness-level gate and rely on Codex's native host sandbox for OS containment. The Windows filesystem-delete adapter is intentionally unavailable until Windows metadata can be restored exactly.
