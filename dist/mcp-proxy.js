@@ -1,34 +1,6 @@
 // @bun
-// src/mcp-proxy.ts
-import { once } from "events";
-import { createConnection } from "net";
-async function main() {
-  const socketPath = process.env.RECOVERY_AUTHORITY_MCP_SOCKET;
-  if (!socketPath)
-    throw new Error("RECOVERY_AUTHORITY_MCP_SOCKET is required");
-  const socket = createConnection({ path: socketPath, allowHalfOpen: true });
-  await once(socket, "connect");
-  if (process.env.RECOVERY_AUTHORITY_DEBUG === "1")
-    process.stderr.write(`[authority-proxy] connected
-`);
-  process.stdin.on("data", (chunk) => {
-    if (process.env.RECOVERY_AUTHORITY_DEBUG === "1")
-      process.stderr.write(`[authority-proxy] stdin ${chunk.length} bytes
-`);
-  });
-  socket.on("data", (chunk) => {
-    if (process.env.RECOVERY_AUTHORITY_DEBUG === "1")
-      process.stderr.write(`[authority-proxy] response ${chunk.length} bytes
-`);
-  });
-  process.stdin.pipe(socket);
-  socket.pipe(process.stdout);
-  socket.on("error", (error) => {
-    process.stderr.write(`Recovery Authority proxy failed: ${error.message}
-`);
-    process.exitCode = 1;
-  });
-  await once(socket, "close");
-}
-if (import.meta.main)
-  await main();
+var __create=Object.create;var{getPrototypeOf:__getProtoOf,defineProperty:__defProp,getOwnPropertyNames:__getOwnPropNames,getOwnPropertyDescriptor:__getOwnPropDesc}=Object,__hasOwnProp=Object.prototype.hasOwnProperty;function __accessProp(key){return this[key]}var __toESMCache_node,__toESMCache_esm,__toESM=(mod,isNodeMode,target)=>{var canCache=mod!=null&&typeof mod==="object";if(canCache){var cache=isNodeMode?__toESMCache_node??=new WeakMap:__toESMCache_esm??=new WeakMap,cached=cache.get(mod);if(cached)return cached}target=mod!=null?__create(__getProtoOf(mod)):{};let to=isNodeMode||!mod||!mod.__esModule?__defProp(target,"default",{value:mod,enumerable:!0}):target;for(let key of __getOwnPropNames(mod))if(!__hasOwnProp.call(to,key))__defProp(to,key,{get:__accessProp.bind(mod,key),enumerable:!0});if(canCache)cache.set(mod,to);return to},__toCommonJS=(from)=>{var entry=(__moduleCache??=new WeakMap).get(from),desc;if(entry)return entry;if(entry=__defProp({},"__esModule",{value:!0}),from&&typeof from==="object"||typeof from==="function"){for(var key of __getOwnPropNames(from))if(!__hasOwnProp.call(entry,key))__defProp(entry,key,{get:__accessProp.bind(from,key),enumerable:!(desc=__getOwnPropDesc(from,key))||desc.enumerable})}return __moduleCache.set(from,entry),entry},__moduleCache,__commonJS=(cb,mod)=>()=>(mod||cb((mod={exports:{}}).exports,mod),mod.exports);var __returnValue=(v)=>v;function __exportSetter(name,newValue){this[name]=__returnValue.bind(null,newValue)}var __export=(target,all)=>{for(var name in all)__defProp(target,name,{get:all[name],enumerable:!0,configurable:!0,set:__exportSetter.bind(all,name)})};var __esm=(fn,res)=>()=>(fn&&(res=fn(fn=0)),res);var __require=import.meta.require;var exports_mcp_proxy={};import{once}from"events";import{createConnection}from"net";async function main(){let socketPath=process.env.RECOVERY_AUTHORITY_MCP_SOCKET;if(!socketPath)throw Error("RECOVERY_AUTHORITY_MCP_SOCKET is required");let socket=createConnection({path:socketPath,allowHalfOpen:!0});if(await once(socket,"connect"),process.env.RECOVERY_AUTHORITY_DEBUG==="1")process.stderr.write(`[authority-proxy] connected
+`);process.stdin.on("data",(chunk)=>{if(process.env.RECOVERY_AUTHORITY_DEBUG==="1")process.stderr.write(`[authority-proxy] stdin ${chunk.length} bytes
+`)}),socket.on("data",(chunk)=>{if(process.env.RECOVERY_AUTHORITY_DEBUG==="1")process.stderr.write(`[authority-proxy] response ${chunk.length} bytes
+`)}),process.stdin.pipe(socket),socket.pipe(process.stdout),socket.on("error",(error)=>{process.stderr.write(`Recovery Authority proxy failed: ${error.message}
+`),process.exitCode=1}),await once(socket,"close")}var init_mcp_proxy=__esm(async()=>{if(import.meta.main)await main()});await init_mcp_proxy();
