@@ -12,8 +12,8 @@ else
   exit 1
 fi
 
-if [[ -f "$root/dist/approve.js" ]]; then
-  exec "$bun_bin" "$root/dist/approve.js" approve "$@"
+if [[ -f "$root/dist/cli.js" ]]; then
+  exec "$bun_bin" "$root/dist/cli.js" approve "$@"
 fi
 
-exec "$bun_bin" "$root/src/approve.ts" approve "$@"
+exec "$bun_bin" "$root/src/cli.ts" approve "$@"

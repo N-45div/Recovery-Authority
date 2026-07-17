@@ -69,11 +69,15 @@ function finding(category: RiskCategory, executable: string, reason: string): Ri
     executable,
     reason,
     adapterAvailable:
-      category === "filesystem.delete" ||
+      (category === "filesystem.delete" && process.platform !== "win32") ||
       category === "sqlite.mutate" ||
       category === "postgres.schema-mutate" ||
       category === "git.reset-hard",
   };
+}
+
+export function createRiskFinding(category: RiskCategory, executable: string, reason: string): RiskFinding {
+  return finding(category, executable, reason);
 }
 
 const IDENTITY_ROOTS = new Set([
@@ -109,7 +113,7 @@ function interpreterDeletion(executable: string, args: string[]): RiskFinding[] 
   return [];
 }
 
-function classifyWords(input: string[], assignments: string[] = []): RiskFinding[] {
+export function classifyCommandWords(input: string[], assignments: string[] = []): RiskFinding[] {
   const rawExecutable = basename(input[0] ?? "").toLowerCase();
   const rawArgs = input.slice(1);
   const rootOverrides = identityAssignments([...assignments, ...(rawExecutable === "env" ? rawArgs : [])]);
@@ -134,7 +138,8 @@ function classifyWords(input: string[], assignments: string[] = []): RiskFinding
     executable === "approve-operation.sh" ||
     executable === "recovery-authority-approve" ||
     (["bash", "sh", "zsh", "dash", "bun", "node"].includes(executable) &&
-      args.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg)))
+      (args.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg)) ||
+        (args.some((arg) => /(?:^|\/)(?:cli\.js|cli\.ts)$/.test(arg)) && args.includes("approve"))))
   ) {
     return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
   }
@@ -238,7 +243,7 @@ function walk(value: unknown, findings: RiskFinding[]): void {
   }
   if (!value || typeof value !== "object") return;
   const node = value as Record<string, unknown>;
-  if (node.type === "Command") findings.push(...classifyWords(commandWords(node), assignmentWords(node)));
+  if (node.type === "Command") findings.push(...classifyCommandWords(commandWords(node), assignmentWords(node)));
   for (const nested of Object.values(node)) walk(nested, findings);
 }
 

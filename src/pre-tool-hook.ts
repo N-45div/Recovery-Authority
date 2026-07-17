@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { sha256 } from "./crypto.js";
 import { analyzeShellCommand, type RiskFinding } from "./shell-policy.js";
+import { analyzePowerShellCommand } from "./powershell-policy.js";
 
 const HookInput = z.object({
   hook_event_name: z.enum(["PreToolUse", "SubagentStart", "SubagentStop"]),
@@ -74,14 +75,15 @@ function analyzeFileTool(toolName: string, toolInput: Record<string, unknown>): 
 function deny(findings: RiskFinding[], command: string | null): HookDecision {
   const categories = [...new Set(findings.map((item) => item.category))];
   const categorySet = new Set(categories);
+  const exactAdapterAvailable = findings.every((item) => item.adapterAvailable);
   let nextStep: string;
-  if (categorySet.size === 1 && categorySet.has("filesystem.delete")) {
+  if (exactAdapterAvailable && categorySet.size === 1 && categorySet.has("filesystem.delete")) {
     nextStep = "Call recovery_prepare_filesystem_delete with the exact workspace-relative paths, then use the approved operation with recovery_commit_filesystem_delete.";
-  } else if (categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
+  } else if (exactAdapterAvailable && categorySet.size === 1 && categorySet.has("sqlite.mutate")) {
     nextStep = "Call recovery_prepare_sqlite_mutation with the exact database path and SQL, then use the approved operation with recovery_commit_sqlite_mutation.";
-  } else if (categorySet.size === 1 && categorySet.has("git.reset-hard")) {
+  } else if (exactAdapterAvailable && categorySet.size === 1 && categorySet.has("git.reset-hard")) {
     nextStep = "Call recovery_prepare_git_reset_hard with the repository root and target commit, then use the approved operation with recovery_commit_git_reset_hard.";
-  } else if (categorySet.size === 1 && categorySet.has("postgres.schema-mutate")) {
+  } else if (exactAdapterAvailable && categorySet.size === 1 && categorySet.has("postgres.schema-mutate")) {
     nextStep = "Call recovery_prepare_postgres_mutation with the connection URI, authorized schema, and exact SQL, then use the approved operation with recovery_commit_postgres_mutation.";
   } else {
     nextStep = "No exact recovery adapter covers every detected effect. Do not retry through another tool, interpreter, agent, or wrapper; narrow the operation or ask the user for a supported recovery plan.";
@@ -130,7 +132,12 @@ export function evaluateHook(rawInput: unknown): HookDecision {
   if (fileFindings.length > 0) return deny(fileFindings, null);
   if (!command) return { blocked: false, command: null, findings: [], output: null };
 
-  const findings = analyzeShellCommand(command);
+  const dialect = process.env.RECOVERY_AUTHORITY_SHELL_DIALECT ?? (
+    process.platform === "win32" || input.tool_name === "PowerShell" ? "powershell" : "posix"
+  );
+  const findings = dialect === "powershell"
+    ? analyzePowerShellCommand(command)
+    : analyzeShellCommand(command);
   if (findings.length === 0) return { blocked: false, command, findings, output: null };
   return deny(findings, command);
 }
@@ -171,7 +178,7 @@ async function recordDecision(input: HookInput, decision: HookDecision): Promise
   await appendFile(resolve(dataDir, "hook-events.jsonl"), `${JSON.stringify(event)}\n`, { mode: 0o600 });
 }
 
-async function main(): Promise<void> {
+export async function runHook(): Promise<void> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   const rawInput = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
@@ -180,5 +187,3 @@ async function main(): Promise<void> {
   await recordDecision(parsedInput, decision).catch(() => undefined);
   if (decision.output) process.stdout.write(`${JSON.stringify(decision.output)}\n`);
 }
-
-if (import.meta.main) await main();

@@ -20,17 +20,8 @@ if [[ -n "${RECOVERY_AUTHORITY_MCP_SOCKET:-}" ]]; then
   exec "$bun_bin" "$root/src/mcp-proxy.ts"
 fi
 
-data_dir=${RECOVERY_AUTHORITY_DATA_DIR:-.recovery-authority}
-key_dir=${RECOVERY_AUTHORITY_KEY_DIR:-${data_dir}.keys}
-if [[ -f "$root/dist/approve.js" ]]; then
-  "$bun_bin" "$root/dist/approve.js" init --data-dir "$data_dir" --key-dir "$key_dir" >/dev/null
-else
-  "$bun_bin" "$root/src/approve.ts" init --data-dir "$data_dir" --key-dir "$key_dir" >/dev/null
-fi
-export RECOVERY_AUTHORITY_KEY_DIR="$key_dir"
-
-if [[ -f "$root/dist/server.js" ]]; then
-  exec "$bun_bin" "$root/dist/server.js"
+if [[ -f "$root/dist/cli.js" ]]; then
+  exec "$bun_bin" "$root/dist/cli.js" mcp
 fi
 
-exec "$bun_bin" "$root/src/server.ts"
+exec "$bun_bin" "$root/src/cli.ts" mcp

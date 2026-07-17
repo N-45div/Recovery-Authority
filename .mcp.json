@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "recovery-authority": {
-      "command": "bash",
-      "args": ["${PLUGIN_ROOT}/scripts/start-mcp.sh"],
+      "command": "bun",
+      "args": ["${PLUGIN_ROOT}/dist/cli.js", "mcp"],
       "env": {
         "RECOVERY_AUTHORITY_DATA_DIR": "${PLUGIN_DATA}"
       }

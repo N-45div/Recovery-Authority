@@ -14,8 +14,7 @@ function option(args: string[], name: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-function parseArguments(): ApprovalArguments {
-  const args = process.argv.slice(2);
+function parseArguments(args: string[]): ApprovalArguments {
   if (!(["approve", "init"] as string[]).includes(args[0] ?? "")) {
     throw new Error("Usage: init|approve [operation-id] --data-dir <path> [--key-dir <path>]");
   }
@@ -28,8 +27,8 @@ function parseArguments(): ApprovalArguments {
   return { command: "approve", operationId: args[1], dataDir, keyDir };
 }
 
-async function main(): Promise<void> {
-  const arguments_ = parseArguments();
+export async function runApprovalCommand(args = process.argv.slice(2)): Promise<void> {
+  const arguments_ = parseArguments(args);
   if (arguments_.command === "init") {
     await initializeAuthority(arguments_.dataDir, arguments_.keyDir);
     process.stdout.write(`${JSON.stringify({ initialized: true, dataDir: arguments_.dataDir })}\n`);
@@ -58,5 +57,3 @@ async function main(): Promise<void> {
   const { capability: _capability, ...receipt } = approved;
   process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
 }
-
-if (import.meta.main) await main();

@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resolve } from "node:path";
 import { realpath } from "node:fs/promises";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CommitFilesystemDeleteInput,
   CommitGitResetHardInput,
@@ -23,13 +25,18 @@ import { PostgresRecoveryService } from "./postgres.js";
 import { SqliteRecoveryService } from "./sqlite.js";
 import { OperationStore } from "./store.js";
 import { inspectRuntimeIdentity } from "./identity.js";
+import { formatApprovalCommand, platformCapabilities } from "./platform.js";
+import { pathsEqual } from "./path-policy.js";
 
 const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
 const keyDir = authorityKeyDir(dataDir);
 const authorityWorkspaceRoot = process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT
   ? await realpath(resolve(process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT))
   : null;
-const pluginRoot = resolve(process.env.PLUGIN_ROOT ?? ".");
+const pluginRoot = process.env.PLUGIN_ROOT
+  ? resolve(process.env.PLUGIN_ROOT)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const cliEntry = resolve(pluginRoot, "dist", "cli.js");
 const store = new OperationStore(dataDir);
 const verifier = await PublicCapabilityVerifier.load(dataDir);
 const approvals = new AuthorizationRegistry(dataDir, store, verifier);
@@ -38,14 +45,10 @@ const gitService = new GitRecoveryService(dataDir, store, verifier);
 const postgresService = new PostgresRecoveryService(dataDir, store, verifier);
 const sqliteService = new SqliteRecoveryService(dataDir, store, verifier);
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 async function assertAuthorityWorkspace(requestedRoot: string): Promise<void> {
   if (!authorityWorkspaceRoot) return;
   const requested = await realpath(resolve(requestedRoot));
-  if (requested !== authorityWorkspaceRoot) {
+  if (!pathsEqual(requested, authorityWorkspaceRoot)) {
     throw new Error(`Recovery scope must equal the sandbox workspace: ${authorityWorkspaceRoot}`);
   }
 }
@@ -54,13 +57,13 @@ function authorizationView<T extends { operationId: string; status: string }>(au
   return {
     ...authorization,
     approvalCommand: authorization.status === "pending"
-      ? `bash ${shellQuote(resolve(pluginRoot, "scripts", "approve-operation.sh"))} ${authorization.operationId} --data-dir ${shellQuote(dataDir)} --key-dir ${shellQuote(keyDir)}`
+      ? formatApprovalCommand(cliEntry, authorization.operationId, dataDir, keyDir)
       : null,
   };
 }
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.8.0" },
+  { name: "recovery-authority", version: "0.9.0" },
   {
     instructions:
       "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Hook coverage applies only when the bundled hook is trusted.",
@@ -81,7 +84,9 @@ server.registerTool(
       identity,
       invariants: {
         accountRootIsNotDerivedFromHomeOnPosix:
-          process.platform === "win32" || !["windows-environment", "unresolved"].includes(identity.accountHomeSource),
+          process.platform === "win32" || identity.accountHomeSource !== "unresolved",
+        accountRootUsesWindowsKnownFolder:
+          process.platform !== "win32" || identity.accountHomeSource === "windows-known-folder",
         authorityDataOutsideMutableHomeRequired: true,
         destructiveEffectsAreActorIndependent: true,
         nativeSubagentIdentityAvailableOnlyInLifecycleHooks: true,
@@ -91,6 +96,7 @@ server.registerTool(
       executionBoundary: {
         sandboxActive: process.env.RECOVERY_AUTHORITY_SANDBOX_HOST === "1",
         authorityTransport: process.env.RECOVERY_AUTHORITY_SANDBOX_HOST === "1" ? "unix-socket" : "stdio",
+        platform: platformCapabilities(),
         signingKeyDirectory: keyDir,
         workspaceRoot: authorityWorkspaceRoot,
       },
