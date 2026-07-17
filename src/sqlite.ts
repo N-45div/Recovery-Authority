@@ -1,24 +1,11 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { PrepareSqliteMutation, SqliteRecoveryOperation } from "./contracts.js";
 import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
-
-function assertInside(root: string, candidate: string): void {
-  const rel = relative(root, candidate);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`Database path escapes or equals the workspace root: ${candidate}`);
-  }
-}
-
-function assertWithin(root: string, candidate: string): void {
-  const rel = relative(root, candidate);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`Database path escapes the workspace root through a symlink: ${candidate}`);
-  }
-}
+import { assertInsidePath, assertSafeRelativePath, assertWithinPath } from "./path-policy.js";
 
 function validateMutation(sql: string): void {
   if (/\b(attach|detach|vacuum|pragma|begin|commit|rollback)\b/i.test(sql)) {
@@ -66,9 +53,10 @@ export class SqliteRecoveryService {
   async prepare(input: PrepareSqliteMutation): Promise<{ operation: SqliteRecoveryOperation }> {
     validateMutation(input.sql);
     const workspaceRoot = await realpath(resolve(input.workspaceRoot));
+    assertSafeRelativePath(input.databasePath);
     const databasePath = resolve(workspaceRoot, input.databasePath);
-    assertInside(workspaceRoot, databasePath);
-    assertWithin(workspaceRoot, await realpath(dirname(databasePath)));
+    assertInsidePath(workspaceRoot, databasePath);
+    assertWithinPath(workspaceRoot, await realpath(dirname(databasePath)));
     const stat = await lstat(databasePath);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("SQLite database must be a regular file inside the workspace");
 

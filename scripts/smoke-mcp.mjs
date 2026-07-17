@@ -40,12 +40,13 @@ function runGit(args) {
 async function approve(preparedOutput) {
   assert.equal(preparedOutput.authorization.status, "pending");
   assert.equal(preparedOutput.authorization.capability, null);
-  assert.match(preparedOutput.authorization.approvalCommand, /approve-operation\.sh/);
+  assert.match(preparedOutput.authorization.approvalCommand, /dist\/cli\.js/);
   assert.equal("capability" in preparedOutput, false);
   const result = spawnSync(
-    "bash",
+    bun,
     [
-      join(pluginRoot, "scripts", "approve-operation.sh"),
+      join(pluginRoot, "dist", "cli.js"),
+      "approve",
       preparedOutput.operation.id,
       "--data-dir",
       dataDir,
@@ -81,8 +82,8 @@ runBun(`
 `);
 
 const transport = new StdioClientTransport({
-  command: "bash",
-  args: [join(pluginRoot, "scripts", "start-mcp.sh")],
+  command: bun,
+  args: [join(pluginRoot, "dist", "cli.js"), "mcp"],
   env: {
     PATH: process.env.PATH ?? "",
     PLUGIN_ROOT: pluginRoot,

@@ -14,6 +14,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 export interface PostgresTools {
   pgDump: string;
   psql: string;
+  pgDumpArgs?: string[];
+  psqlArgs?: string[];
   maxOutputBytes?: number;
   timeoutMs?: number;
 }
@@ -27,10 +29,22 @@ interface ValidatedMutation {
   targets: QName[];
 }
 
+function argumentPrefix(name: string): string[] {
+  const value = process.env[name];
+  if (!value) return [];
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    throw new Error(`${name} must be a JSON array of strings`);
+  }
+  return parsed;
+}
+
 function toolsFromEnvironment(): PostgresTools {
   return {
     pgDump: process.env.RECOVERY_AUTHORITY_PG_DUMP ?? "pg_dump",
     psql: process.env.RECOVERY_AUTHORITY_PSQL ?? "psql",
+    pgDumpArgs: argumentPrefix("RECOVERY_AUTHORITY_PG_DUMP_ARGS_JSON"),
+    psqlArgs: argumentPrefix("RECOVERY_AUTHORITY_PSQL_ARGS_JSON"),
     maxOutputBytes: Number(process.env.RECOVERY_AUTHORITY_MAX_DUMP_BYTES) || DEFAULT_MAX_OUTPUT_BYTES,
     timeoutMs: Number(process.env.RECOVERY_AUTHORITY_POSTGRES_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
   };
@@ -234,6 +248,8 @@ export class PostgresRecoveryService {
     this.tools = {
       pgDump: tools.pgDump,
       psql: tools.psql,
+      pgDumpArgs: tools.pgDumpArgs ?? [],
+      psqlArgs: tools.psqlArgs ?? [],
       maxOutputBytes: tools.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
       timeoutMs: tools.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     };
@@ -248,8 +264,16 @@ export class PostgresRecoveryService {
     });
   }
 
+  private async pgDump(args: string[], connectionUri: string): Promise<CommandResult> {
+    return await this.command(this.tools.pgDump, [...this.tools.pgDumpArgs, ...args], connectionUri);
+  }
+
+  private async psql(args: string[], connectionUri: string, input?: Uint8Array): Promise<CommandResult> {
+    return await this.command(this.tools.psql, [...this.tools.psqlArgs, ...args], connectionUri, input);
+  }
+
   private async dump(connectionUri: string): Promise<Buffer> {
-    const result = await this.command(this.tools.pgDump, [
+    const result = await this.pgDump([
       "--dbname", connectionUri,
       "--format=p",
       "--clean",
@@ -261,7 +285,7 @@ export class PostgresRecoveryService {
 
   private async execute(connectionUri: string, sql: string, schema: string): Promise<void> {
     const scopedSql = `SET LOCAL search_path TO ${quoteIdentifier(schema)}, pg_catalog;\n${sql}`;
-    await this.command(this.tools.psql, [
+    await this.psql([
       "--no-psqlrc",
       "--no-password",
       "--set", "ON_ERROR_STOP=1",
@@ -272,7 +296,7 @@ export class PostgresRecoveryService {
   }
 
   private async restore(connectionUri: string, dump: Uint8Array): Promise<void> {
-    await this.command(this.tools.psql, [
+    await this.psql([
       "--no-psqlrc",
       "--no-password",
       "--set", "ON_ERROR_STOP=1",
@@ -301,7 +325,7 @@ SELECT CASE WHEN
       AND n.nspname = ${sqlLiteral(schema)} AND c.relname IN (${names})
   )
 THEN 'unsafe' ELSE 'safe' END;`;
-    const result = await this.command(this.tools.psql, [
+    const result = await this.psql([
       "--no-psqlrc",
       "--no-password",
       "--set", "ON_ERROR_STOP=1",
@@ -317,7 +341,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
 
   private async createDrillDatabase(connectionUri: string, database: string): Promise<string> {
     const adminUri = withDatabase(connectionUri, "postgres");
-    await this.command(this.tools.psql, [
+    await this.psql([
       "--no-psqlrc",
       "--no-password",
       "--set", "ON_ERROR_STOP=1",
@@ -329,7 +353,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
 
   private async dropDrillDatabase(connectionUri: string, database: string): Promise<void> {
     const adminUri = withDatabase(connectionUri, "postgres");
-    await this.command(this.tools.psql, [
+    await this.psql([
       "--no-psqlrc",
       "--no-password",
       "--set", "ON_ERROR_STOP=1",

@@ -7,6 +7,7 @@ import type { FileRecord, GitResetHardRecoveryOperation, PrepareGitResetHard } f
 import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { collectRecords, recordsWitness, restoreRecords } from "./filesystem.js";
 import { OperationStore } from "./store.js";
+import { pathsEqual } from "./path-policy.js";
 
 interface GitState {
   records: FileRecord[];
@@ -151,7 +152,7 @@ export class GitRecoveryService {
   async prepare(input: PrepareGitResetHard): Promise<{ operation: GitResetHardRecoveryOperation }> {
     const requestedRoot = await realpath(resolve(input.repositoryRoot));
     const repositoryRoot = await realpath(await runGit(requestedRoot, ["rev-parse", "--show-toplevel"]));
-    if (repositoryRoot !== requestedRoot) throw new Error(`repositoryRoot must be the Git worktree root: ${repositoryRoot}`);
+    if (!pathsEqual(repositoryRoot, requestedRoot)) throw new Error(`repositoryRoot must be the Git worktree root: ${repositoryRoot}`);
     await assertSupportedRepository(repositoryRoot);
     const targetCommit = await runGit(repositoryRoot, [
       "rev-parse",

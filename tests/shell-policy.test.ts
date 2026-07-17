@@ -12,6 +12,7 @@ describe("shell policy", () => {
     ["./scripts/approve-operation.sh 123", "authorization.approval"],
     ["bash ./scripts/approve-operation.sh 123", "authorization.approval"],
     ["bun ./dist/approve.js approve 123", "authorization.approval"],
+    ["bun ./dist/cli.js approve 123", "authorization.approval"],
     ["rm -rf ./cache", "filesystem.delete"],
     ["sudo -n rm -rf ./cache", "filesystem.delete"],
     ["env MODE=clean unlink state.json", "filesystem.delete"],

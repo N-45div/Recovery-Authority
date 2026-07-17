@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorityKeyDir } from "./crypto.js";
 import { initializeAuthority } from "./signer.js";
 import { startAuthorityDaemon } from "./authority-daemon.js";
+import { containsPath } from "./path-policy.js";
 
 interface SandboxArguments {
   workspace: string;
@@ -43,11 +44,6 @@ function parseArguments(): SandboxArguments {
       args.slice(0, separator).includes("--stage-codex-home") || basename(args[separator + 1] ?? "") === "codex",
     codexHome: null,
   };
-}
-
-function containsPath(container: string, candidate: string): boolean {
-  const rel = relative(container, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function assertDisjoint(label: string, workspace: string, protectedPath: string): void {

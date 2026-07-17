@@ -1,31 +1,17 @@
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { FileRecord, FilesystemRecoveryOperation, PrepareFilesystemDelete } from "./contracts.js";
 import { PublicCapabilityVerifier, type CapabilityVerifier, sha256 } from "./crypto.js";
 import { OperationStore } from "./store.js";
 import { assertTargetExcludesProtectedRoots, inspectRuntimeIdentity } from "./identity.js";
-
-function assertInside(root: string, candidate: string): void {
-  const rel = relative(root, candidate);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`Path escapes or equals the workspace root: ${candidate}`);
-  }
-}
-
-function assertWithin(root: string, candidate: string): void {
-  const rel = relative(root, candidate);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`Path escapes the workspace root through a symlink: ${candidate}`);
-  }
-}
+import { assertInsidePath, assertSafeRelativePath, assertWithinPath, containsPath } from "./path-policy.js";
 
 function assertDisjoint(paths: string[]): void {
   for (const [index, parent] of paths.entries()) {
     for (const child of paths.slice(index + 1)) {
-      const rel = relative(parent, child);
-      if (rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) {
+      if (containsPath(parent, child) || containsPath(child, parent)) {
         throw new Error(`Recovery scopes overlap: ${parent} contains ${child}`);
       }
     }
@@ -96,10 +82,14 @@ export class FilesystemRecoveryService {
   ) {}
 
   async prepare(input: PrepareFilesystemDelete): Promise<{ operation: FilesystemRecoveryOperation }> {
+    if (process.platform === "win32") {
+      throw new Error("Windows filesystem deletion remains block-only until ACL, alternate-stream, and reparse-point metadata can be restore-tested exactly");
+    }
     const workspaceRoot = await realpath(resolve(input.workspaceRoot));
-    const requestedPaths = [...new Set(input.paths.map((path) => path.replace(/^\.\//, "")))];
+    const requestedPaths = [...new Set(input.paths.map((path) => path.replace(/^(?:\.\/|\.\\)/, "")))];
+    requestedPaths.forEach((path) => assertSafeRelativePath(path));
     const absolutePaths = requestedPaths.map((path) => resolve(workspaceRoot, path)).sort();
-    absolutePaths.forEach((path) => assertInside(workspaceRoot, path));
+    absolutePaths.forEach((path) => assertInsidePath(workspaceRoot, path));
     const identity = await inspectRuntimeIdentity(this.dataDir);
     for (const path of absolutePaths) {
       assertTargetExcludesProtectedRoots(path, [
@@ -109,7 +99,7 @@ export class FilesystemRecoveryService {
     }
     assertDisjoint(absolutePaths);
     for (const path of absolutePaths) {
-      assertWithin(workspaceRoot, await realpath(dirname(path)));
+      assertWithinPath(workspaceRoot, await realpath(dirname(path)));
     }
     const normalizedPaths = absolutePaths.map((path) => relative(workspaceRoot, path));
 

@@ -1,13 +1,14 @@
 import { readFile, realpath } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+import { containsPath, pathsEqual } from "./path-policy.js";
 
 export interface RuntimeIdentity {
   platform: NodeJS.Platform;
   uid: number | null;
   accountHome: string | null;
-  accountHomeSource: "passwd" | "nss" | "bsd-id" | "windows-environment" | "unresolved";
+  accountHomeSource: "passwd" | "nss" | "bsd-id" | "windows-known-folder" | "unresolved";
   environmentHome: string | null;
   environmentHomeMatchesAccount: boolean | null;
   authorityDataRoot: string;
@@ -31,6 +32,30 @@ function runPasswdLookup(command: string, args: string[], uid: number): string |
     timeout: 2_000,
   });
   return result.status === 0 ? passwdHome(result.stdout, uid) : null;
+}
+
+function windowsKnownFolderHome(): string | null {
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "[Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 2_000,
+      windowsHide: true,
+      env: {
+        PATH: process.env.PATH ?? "",
+        SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
+      },
+    },
+  );
+  const home = result.status === 0 ? result.stdout.trim() : "";
+  return home || null;
 }
 
 async function canonicalIfPresent(path: string | null): Promise<string | null> {
@@ -66,12 +91,8 @@ export async function inspectRuntimeIdentity(dataDir: string): Promise<RuntimeId
       if (accountHome) accountHomeSource = "nss";
     }
   } else if (process.platform === "win32") {
-    accountHome = process.env.USERPROFILE ?? (
-      process.env.HOMEDRIVE && process.env.HOMEPATH
-        ? `${process.env.HOMEDRIVE}${process.env.HOMEPATH}`
-        : null
-    );
-    if (accountHome) accountHomeSource = "windows-environment";
+    accountHome = windowsKnownFolderHome();
+    if (accountHome) accountHomeSource = "windows-known-folder";
   }
 
   const environmentHome = process.env.HOME ?? process.env.USERPROFILE ?? null;
@@ -80,8 +101,7 @@ export async function inspectRuntimeIdentity(dataDir: string): Promise<RuntimeId
   const authorityDataRoot = await canonicalIfPresent(resolve(dataDir)) as string;
   const warnings: string[] = [];
   if (!canonicalAccountHome) warnings.push("OS account home could not be resolved independently of the process environment");
-  if (accountHomeSource === "windows-environment") warnings.push("Windows account home is environment-derived in this release");
-  if (canonicalAccountHome && canonicalEnvironmentHome !== canonicalAccountHome) {
+  if (canonicalAccountHome && canonicalEnvironmentHome && !pathsEqual(canonicalAccountHome, canonicalEnvironmentHome)) {
     warnings.push("Process HOME/USERPROFILE differs from the OS account home");
   }
 
@@ -93,16 +113,11 @@ export async function inspectRuntimeIdentity(dataDir: string): Promise<RuntimeId
     environmentHome: canonicalEnvironmentHome,
     environmentHomeMatchesAccount:
       canonicalAccountHome && canonicalEnvironmentHome
-        ? canonicalAccountHome === canonicalEnvironmentHome
+        ? pathsEqual(canonicalAccountHome, canonicalEnvironmentHome)
         : null,
     authorityDataRoot,
     warnings,
   };
-}
-
-function containsPath(container: string, candidate: string): boolean {
-  const rel = relative(container, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 export function assertTargetExcludesProtectedRoots(

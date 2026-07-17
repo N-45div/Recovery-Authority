@@ -7,8 +7,8 @@ const pluginRoot = process.env.PLUGIN_ROOT;
 if (!pluginRoot) throw new Error("PLUGIN_ROOT is required");
 
 const transport = new StdioClientTransport({
-  command: "bash",
-  args: [join(pluginRoot, "scripts", "start-mcp.sh")],
+  command: process.execPath,
+  args: [join(pluginRoot, "dist", "cli.js"), "mcp"],
   env: {
     PATH: process.env.PATH ?? "",
     PLUGIN_ROOT: pluginRoot,

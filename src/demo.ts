@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,23 +73,17 @@ async function main(): Promise<void> {
   `);
   process.stdout.write(`      BEFORE  ${rows()}\n`);
 
-  const pgDump = join(temporaryRoot, "pg_dump");
-  const psql = join(temporaryRoot, "psql");
-  await Promise.all([
-    writeFile(pgDump, `#!/bin/sh\nexec docker exec -i ${container} pg_dump "$@"\n`, { mode: 0o700 }),
-    writeFile(psql, `#!/bin/sh\nexec docker exec -i ${container} psql "$@"\n`, { mode: 0o700 }),
-  ]);
-  await Promise.all([chmod(pgDump, 0o700), chmod(psql, 0o700)]);
-
   const transport = new StdioClientTransport({
-    command: "bash",
-    args: [join(pluginRoot, "scripts", "start-mcp.sh")],
+    command: process.execPath,
+    args: [join(pluginRoot, "dist", "cli.js"), "mcp"],
     env: {
       PATH: process.env.PATH ?? "",
       PLUGIN_ROOT: pluginRoot,
       RECOVERY_AUTHORITY_DATA_DIR: dataDir,
-      RECOVERY_AUTHORITY_PG_DUMP: pgDump,
-      RECOVERY_AUTHORITY_PSQL: psql,
+      RECOVERY_AUTHORITY_PG_DUMP: "docker",
+      RECOVERY_AUTHORITY_PG_DUMP_ARGS_JSON: JSON.stringify(["exec", "-i", container, "pg_dump"]),
+      RECOVERY_AUTHORITY_PSQL: "docker",
+      RECOVERY_AUTHORITY_PSQL_ARGS_JSON: JSON.stringify(["exec", "-i", container, "psql"]),
     },
     stderr: "pipe",
   });
@@ -117,9 +111,10 @@ async function main(): Promise<void> {
 
   process.stdout.write("[4/6] Waiting for separate human authorization\n");
   const approval = spawnSync(
-    "bash",
+    process.execPath,
     [
-      join(pluginRoot, "scripts", "approve-operation.sh"),
+      join(pluginRoot, "dist", "cli.js"),
+      "approve",
       preparedOutput.operation.id,
       "--data-dir",
       dataDir,

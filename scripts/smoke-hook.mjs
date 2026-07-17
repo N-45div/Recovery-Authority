@@ -11,9 +11,35 @@ const dataDir = await mkdtemp(join(tmpdir(), "recovery-hook-smoke-"));
 const localBun = join(pluginRoot, ".tools", "bun", "bin", "bun");
 const bun = existsSync(localBun) ? localBun : "bun";
 
+async function invokeBootstrap(payload, pluginEnvironment = {}) {
+  const hooks = JSON.parse(await readFile(join(pluginRoot, "hooks", "hooks.json"), "utf8"));
+  const command = hooks.hooks.PreToolUse[0].hooks[0].command;
+  return await new Promise((resolveResult, reject) => {
+    const env = { ...process.env };
+    delete env.PLUGIN_ROOT;
+    delete env.PLUGIN_DATA;
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.CLAUDE_PLUGIN_DATA;
+    Object.assign(env, pluginEnvironment);
+    const child = spawn("bash", ["-c", command], { cwd: pluginRoot, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.on("error", (error) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolveResult({ status, stdout, stderr }));
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
 async function invoke(payload) {
   const result = await new Promise((resolveResult, reject) => {
-    const child = spawn(bun, [join(pluginRoot, "dist", "pre-tool-hook.js")], {
+    const child = spawn(bun, [join(pluginRoot, "dist", "cli.js"), "hook"], {
       cwd: pluginRoot,
       env: {
         ...process.env,
@@ -36,6 +62,36 @@ async function invoke(payload) {
 }
 
 try {
+  const hookManifest = JSON.parse(await readFile(join(pluginRoot, "hooks", "hooks.json"), "utf8"));
+  for (const registrations of Object.values(hookManifest.hooks)) {
+    for (const registration of registrations) {
+      for (const hook of registration.hooks) {
+        assert.match(hook.command, /dist\/cli\.js/);
+        assert.match(hook.commandWindows, /dist\\cli\.js/);
+        assert.doesNotMatch(hook.commandWindows, /\.sh/);
+      }
+    }
+  }
+
+  const safePayload = {
+    hook_event_name: "PreToolUse",
+    session_id: "root-session",
+    turn_id: "root-turn",
+    cwd: pluginRoot,
+    tool_name: "Bash",
+    tool_input: { command: "git status --short" },
+    permission_mode: "default",
+  };
+  const unavailable = await invokeBootstrap(safePayload);
+  assert.equal(unavailable.status, 0, unavailable.stderr);
+  assert.equal(unavailable.stdout, "");
+
+  const compatible = await invokeBootstrap(safePayload, {
+    CLAUDE_PLUGIN_ROOT: pluginRoot,
+    CLAUDE_PLUGIN_DATA: dataDir,
+  });
+  assert.equal(compatible.status, 0, compatible.stderr);
+
   const shell = await invoke({
     hook_event_name: "PreToolUse",
     session_id: "root-session",
@@ -77,9 +133,9 @@ try {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  assert.equal(events.length, 3);
-  assert.equal(events[2].agentId, "worker-42");
-  assert.equal(events[2].permissionMode, "bypassPermissions");
+  assert.equal(events.length, 4);
+  assert.equal(events[3].agentId, "worker-42");
+  assert.equal(events[3].permissionMode, "bypassPermissions");
   assert.equal(events[0].commandDigest.length, 64);
   assert.equal("command" in events[0], false);
 
