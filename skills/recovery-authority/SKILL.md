@@ -5,7 +5,7 @@ description: Use when a requested coding task may delete or destructively replac
 
 # Recovery Authority
 
-Route destructive filesystem deletes, local SQLite mutations, schema-scoped PostgreSQL mutations, and Git hard resets through the Recovery Authority MCP tools.
+Route destructive filesystem deletes, local SQLite mutations, schema-scoped PostgreSQL mutations, and Git hard resets through the Recovery Authority MCP tools. Bind independent multi-effect tasks into one Recovery Manifest instead of coordinating separately approved effects in chat.
 
 The bundled `PreToolUse` hook independently blocks recognized destructive Bash and PowerShell commands. Do not retry a denied command through `sudo`, `env`, `sh -c`, PowerShell dynamic invocation, command substitution, a script wrapper, or another execution tool.
 
@@ -18,18 +18,24 @@ The bundled `PreToolUse` hook independently blocks recognized destructive Bash a
 5. For local SQLite mutation, call `recovery_prepare_sqlite_mutation` with the database path and exact SQL.
 6. For PostgreSQL, call `recovery_prepare_postgres_mutation` with the connection URI, authorized schema, and exact SQL. The connection role must be able to create and drop the temporary drill database.
 7. For `git reset --hard`, call `recovery_prepare_git_reset_hard` with the repository root and exact target.
-8. Report the operation ID, affected scope, backup scope, proof digest, expiry, restore-drill result, and exact `approvalCommand` returned by the prepare tool.
-9. Stop and wait while the user runs `approvalCommand` in a separate human-controlled terminal. Never invoke, wrap, automate, or type into the approval command for the user.
-10. After preparation, re-run `recovery_orient` with the exact operation ID when checking proof or approval readiness. Category similarity alone never transfers recovery coverage between operations.
-11. After the user confirms approval, call `recovery_get_authorization`. Commit only when it returns `status: approved`, a non-null approval digest, and the proof-bound capability.
-12. Use only the corresponding exact MCP commit tool. An approved graph edge never makes the equivalent raw shell command executable.
-13. Call `recovery_get_operation` when status is uncertain and the corresponding restore tool when the effect must be reversed. PostgreSQL restore requires the connection URI again because credentials are not persisted.
-14. For unsupported SQL, other Git commands, infrastructure, overwrite, sync, container, remote-storage, root-override, shell-launched-agent, mixed-effect, or opaque-script findings, stop and explain the unsatisfied `safeCut` requirement.
+8. For one effect, report the operation ID, affected scope, backup scope, proof digest, expiry, restore-drill result, and exact `approvalCommand` returned by the prepare tool.
+9. For two or more independent supported effects, do not approve children individually. Call `recovery_prepare_manifest` with their exact intended commit order. If scopes overlap, stop and narrow or separate the work; never work around the conflict check.
+10. Report the manifest ID, every ordered child effect and scope, aggregate proof digest, expiry, non-atomic saga semantics, and exact manifest `approvalCommand`.
+11. Stop and wait while the user runs the relevant `approvalCommand` in a separate human-controlled terminal. Never invoke, wrap, automate, or type into an operation or manifest approval command for the user.
+12. Re-run `recovery_orient` with the exact operation ID for one effect or exact manifest ID for multiple effects. Category similarity never transfers proof or authority readiness.
+13. For one effect, call `recovery_get_authorization` after approval and use only its corresponding exact commit tool.
+14. For a manifest, call `recovery_get_manifest_authorization`, then `recovery_commit_manifest` with children and execution parameters in exactly the approved order. A manifest capability does not authorize raw commands or independent child commits.
+15. Treat only manifest `status: committed` as a successful commit. `compensated` means the requested saga failed and prior commits were recovered. `partially-recovered` requires immediate reporting of `failure` and `outstandingOperationIds`, followed by `recovery_restore_manifest` when recovery can safely resume.
+16. Call `recovery_get_operation` or `recovery_get_manifest` whenever state is uncertain. PostgreSQL commit and restore parameters require the connection URI again because credentials are not persisted.
+17. For unsupported SQL, other Git commands, infrastructure, overwrite, sync, container, remote-storage, root-override, shell-launched-agent, or opaque-script findings, stop and explain the unsatisfied `safeCut` requirement.
 
 ## Boundaries
 
 - Exact adapters cover `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`. Other categories are block-only.
 - The living consequence graph is a bounded, derived view of operation, approval, and hook receipts. It does not mint capabilities, override a denial, or prove dependencies that have not been observed.
+- Recovery Manifests compose only independent, already restore-tested operations. They provide ordered commit and reverse recovery, not cross-system atomicity or isolation.
+- An aggregate approval derives exact child capabilities. Both the manifest approval and every child receipt must be bound to the same manifest before commit.
+- A manifest rejects overlapping filesystem scopes and multiple operations against the same PostgreSQL database because one child could invalidate another child's proof.
 - `recovery_orient` reports uncertainty explicitly. Never treat a missing graph edge as evidence that no dependency exists.
 - PostgreSQL accepts one parsed `DELETE`, `UPDATE`, `TRUNCATE`, `DROP TABLE`, `DROP SEQUENCE`, or `DROP INDEX` statement. Direct and referenced relations must remain in the authorized schema.
 - PostgreSQL recovery uses a full logical database artifact to include database-local cascades. It rejects function calls, nested queries, user/event triggers, and relevant logical publications that can escape the proven boundary.

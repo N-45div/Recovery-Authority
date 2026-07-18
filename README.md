@@ -2,7 +2,7 @@
 
 **Recovery-backed authorization for coding agents.**
 
-Recovery Authority is an open-source Codex plugin and agent runtime that refuses to grant destructive authority until the exact affected state has been restored successfully in an isolated drill. A separate human approval then releases one short-lived capability bound to that proof, scope, expected result, and expiry.
+Recovery Authority is an open-source Codex plugin and agent runtime that refuses to grant destructive authority until the exact affected state has been restored successfully in an isolated drill. A separate human approval then releases one short-lived capability bound to that proof, scope, expected result, and expiry. Independent effects can be bound into one reviewed Recovery Manifest with ordered commit and reverse recovery.
 
 > The product contract is simple: no destructive authority without demonstrated recovery.
 
@@ -14,6 +14,7 @@ Coding agents now run long tasks, delegate work, modify databases, and execute c
 2. **Full-access mistakes cross boundaries quickly.** A bad path, mutable `$HOME`, cascade, volume purge, or hidden child process can turn one cleanup step into permanent loss.
 3. **Backups are promises until restored.** A stale, incomplete, or inaccessible backup does not prove that the exact operation is recoverable now.
 4. **Subagents multiply execution paths.** Native subagents, scripts, interpreters, and package hooks can perform the same destructive effect through different commands.
+5. **Multi-effect tasks turn approval into choreography.** Separate proofs and prompts do not explain commit order, partial failure, compensation order, or what remains unrecovered.
 
 This affects developers using autonomous coding agents, platform teams enabling agent workflows, and security teams responsible for developer machines, source repositories, and development databases.
 
@@ -44,6 +45,7 @@ portable recovery control plane (public-key verification only)
         | pending approval <- separate human terminal + private signing key
         v
 proof-bound capability -> guarded commit -> receipt -> exact restore
+                         \-> manifest saga -> reverse recovery
 ```
 
 The model-facing MCP bundle contains verification code but no signing implementation. The private Ed25519 key is loaded only by the separate terminal approval path. The Linux runner keeps the authority daemon, ledger, artifacts, and signing directory outside the agent's mount namespace.
@@ -68,6 +70,21 @@ session -> agent -> proposed effect -> affected resource
 The graph is derived evidence, not an authority source. It never contains a capability token, never turns a raw destructive command into an approved command, and never interprets a missing dependency edge as proof that no dependency exists. Proof and approval readiness are reported only when orientation includes the exact operation ID; category similarity cannot transfer authority between operations. Goals and commands are returned and persisted as SHA-256 digests rather than raw text. Only an exact adapter, successful restore drill, separate human approval, signed capability, and live state re-witness can authorize a commit.
 
 The lifecycle hook refreshes this model at session start, before and after compaction, during native subagent lifecycle changes, at permission escalation, and after supported tool calls. Context compaction therefore discards chat tokens without discarding authority state.
+
+## Recovery Manifests
+
+A Recovery Manifest is the multi-effect authority primitive. The agent first prepares two or more exact child operations, then binds their immutable proof digests, state witnesses, statement digests, scopes, and commit order into one aggregate proof. The child scopes must be independent: overlapping filesystem paths and operations against the same PostgreSQL database are rejected.
+
+The user reviews one terminal prompt showing every ordered effect and types the aggregate proof prefix once. The private approval broker signs the manifest and derives a separate exact capability for each child. The MCP worker still has only the public verifier.
+
+```text
+child proofs -> aggregate manifest proof -> one human approval
+     |                                         |
+     +-> commit A -> commit B -> commit C ------+
+             failure at C -> recover B -> recover A
+```
+
+This is an evidence-backed saga, not a distributed transaction. A failure causes every child recorded as committed to be recovered in reverse order. If a live-state guard prevents recovery, the manifest becomes `partially-recovered` and lists the exact outstanding operation IDs. An interrupted `committing` manifest can be sent through `recovery_restore_manifest` to abort recorded commits. Recovery Authority never reports cross-system atomicity.
 
 ## Five-minute judge path
 
@@ -99,6 +116,8 @@ bun run test:mcp
 bun run test:hook
 bun run test:bundle
 ```
+
+`bun run test:mcp` includes a complete two-effect manifest flow: child proofs, aggregate terminal approval, ordered commit, and reverse restore.
 
 ## Recovery adapters
 
@@ -156,7 +175,7 @@ Inside the sandbox, `dist/cli.js mcp` becomes a stdio-to-Unix-socket proxy. Only
 
 ## Current coverage
 
-After the user trusts the plugin hook, recognized destructive Bash, PowerShell, and native patch calls are blocked before execution. Exact recovery is available for `filesystem.delete` on POSIX, plus local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard` on supported hosts. Windows filesystem deletion remains block-only until ACL, alternate-stream, and reparse-point metadata can be restore-tested. Root overrides, sync deletion, container purge, remote-storage deletion, shell-launched agents, filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
+After the user trusts the plugin hook, recognized destructive Bash, PowerShell, and native patch calls are blocked before execution. Exact recovery is available for `filesystem.delete` on POSIX, plus local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard` on supported hosts. Recovery Manifests compose independent exact operations into one approval and a compensated saga. Windows filesystem deletion remains block-only until ACL, alternate-stream, and reparse-point metadata can be restore-tested. Root overrides, sync deletion, container purge, remote-storage deletion, shell-launched agents, filesystem overwrites, other destructive Git commands, unsupported database mutations, infrastructure operations, and opaque scripts are block-only. Commands executed outside Codex or through an uninstrumented tool are not intercepted.
 
 Without `bun run sandbox`, the hook and approval gate remain a harness-level control and cannot mediate arbitrary same-user binaries. In the recommended Linux mode, the operating-system boundary protects host files and authority state even when full-access mode is selected inside the nested harness. The writable repository is intentionally still editable; recognized destructive repository effects are governed by the hook and proof-bound MCP commit tools.
 
@@ -216,7 +235,9 @@ Open `/hooks` and trust the bundled Recovery Authority hook. Codex deliberately 
 
 For the enforceable Linux mode, launch that session through `bun run sandbox` as shown above. The command can wrap another harness by replacing `codex`; use `--stage-codex-home` when Codex is launched indirectly through a shell script.
 
-When a prepare tool succeeds, show the returned `approvalCommand` to the user. The user runs it in a separate terminal and types the displayed 12-character proof prefix. The agent then calls `recovery_get_authorization` and can commit only with the returned approved capability.
+When one prepare tool succeeds, show the returned `approvalCommand` to the user. The user runs it in a separate terminal and types the displayed 12-character proof prefix. The agent then calls `recovery_get_authorization` and can commit only with the returned approved capability.
+
+For an independent multi-effect task, prepare every child without approving them individually, call `recovery_prepare_manifest` with the exact operation order, and show its aggregate `approvalCommand`. After separate terminal approval, call `recovery_get_manifest_authorization`, then `recovery_commit_manifest` with execution parameters in the same order. Read `status`, `failure`, and `outstandingOperationIds`; `compensated` and `partially-recovered` are not successful commits.
 
 To rebuild from source or develop locally:
 
@@ -252,7 +273,7 @@ Run the local TUI against a plugin data directory:
 cargo run -p recovery-authority -- tui --data-dir .recovery-authority
 ```
 
-Navigate with left/right or `1`-`7`. The views show mission status, intercepted effects, recovery operations, delegated agents, the living consequence graph, adapter coverage, and proof receipts.
+Navigate with left/right or `1`-`8`. The views show mission status, intercepted effects, recovery operations, manifests, delegated agents, the living consequence graph, adapter coverage, and proof receipts.
 
 ## MCP tools
 
@@ -273,6 +294,11 @@ Navigate with left/right or `1`-`7`. The views show mission status, intercepted 
 - `recovery_restore_postgres_mutation`
 - `recovery_get_authorization`
 - `recovery_get_operation`
+- `recovery_prepare_manifest`
+- `recovery_commit_manifest`
+- `recovery_restore_manifest`
+- `recovery_get_manifest_authorization`
+- `recovery_get_manifest`
 
 ## Shell policy
 
@@ -284,7 +310,7 @@ The hook detects direct and interpreter-mediated filesystem deletion, patch-file
 
 This project was built with Codex during the official submission period. Codex was used to research the agent-safety problem, challenge the initial CLI-only design, implement the Bun MCP server and Rust TUI, build Bash and PowerShell AST hooks, design the proof-bound capability contracts, create platform adapters, write the PostgreSQL adapter, run destructive recovery drills, diagnose runtime failures, package the plugin, and execute the test matrix.
 
-The human made the key product decisions: recovery must be demonstrated rather than promised; agents must consume the same MCP and skill contract; PostgreSQL cascades require a full-database artifact; approval must occur outside the coding-agent session; and unsupported effects must remain blocked rather than receive a fake safety guarantee. The submission's Codex `/feedback` session ID and dated commit history provide the authoritative GPT-5.6/Codex build trace.
+The human made the key product decisions: recovery must be demonstrated rather than promised; agents must consume the same MCP and skill contract; PostgreSQL cascades require a full-database artifact; multi-effect work needs an aggregate proof and compensated saga rather than repeated blind approvals; approval must occur outside the coding-agent session; and unsupported effects must remain blocked rather than receive a fake safety guarantee. The submission's Codex `/feedback` session ID and dated commit history provide the authoritative GPT-5.6/Codex build trace.
 
 ## License
 

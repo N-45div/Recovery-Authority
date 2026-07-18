@@ -15,7 +15,7 @@ No model actor is trusted to classify its own command as safe. A destructive eff
 
 ## Security invariants
 
-1. **Effect authority is exact.** Approval binds one operation ID, pre-state witness, restore proof, statement or target digest, and expiry.
+1. **Effect authority is exact.** Individual approval binds one operation ID, pre-state witness, restore proof, statement or target digest, and expiry. Aggregate approval binds an immutable ordered set of those exact child proofs.
 2. **Recovery precedes authority.** An adapter must restore its artifact in isolation before approval can be requested.
 3. **Only the approval broker mints forward capabilities.** Prepare paths never create a valid capability.
 4. **Authority is not inherited as a broad permission.** A parent or child can only submit the exact approved operation; a subagent does not receive a reusable destructive grant.
@@ -28,6 +28,9 @@ No model actor is trusted to classify its own command as safe. A destructive eff
 11. **The authority cannot be redirected to host paths.** Filesystem, SQLite, and Git prepare requests must use the canonical workspace selected by the sandbox runner.
 12. **Graph awareness is not authority.** Consequence nodes, readiness vectors, and minimum-safe-cut guidance cannot mint capabilities, override hook denial, or make a raw command executable.
 13. **Unknown edges remain unknown.** Missing dependency data lowers graph closure; it is never interpreted as proof that an effect has no downstream impact.
+14. **Manifest authority is not broad authority.** One manifest confirmation derives exact child capabilities; it cannot add children, change order, widen scopes, alter SQL, or authorize raw shell equivalents.
+15. **Saga recovery is explicit.** Multi-effect commit is not described as atomic. Recorded commits are recovered in reverse order after failure, and any refused recovery remains visible as an outstanding operation in `partially-recovered` state.
+16. **Conflicting proofs are not composed.** Recovery Manifests reject overlapping filesystem scopes and more than one operation against the same PostgreSQL database.
 
 ## Evidence-backed purge families
 
@@ -79,6 +82,9 @@ The root filesystem is mounted read-only and the selected repository is rebound 
 - The Unix socket is an availability boundary, not a secret. A sandboxed process can disconnect its own proxy, but direct socket access exposes only the same typed MCP methods and no signing operation.
 - Hook lifecycle records are operational telemetry, not cryptographic actor attestations. A process inside the sandbox can forge or suppress its own audit-socket events; recovery operations, approvals, and capabilities remain authority-owned.
 - The consequence graph is a derived operational view and may be stale between receipts. Enforcement always re-reads authority-owned operation state and live resource witnesses instead of trusting graph state.
+- Recovery Manifests are compensated sagas, not distributed transactions. There is no cross-system lock or atomic visibility boundary; concurrent writers can invalidate a child commit or later recovery.
+- Manifest progress is journaled after each adapter returns. A process or storage failure inside an adapter's narrow mutation-to-ledger-write interval can require operator inspection of the resource and child operation before resuming recovery.
+- A failed reverse recovery never overwrites later state to force completion. The manifest remains `partially-recovered` with exact outstanding child IDs until the conflict is resolved safely.
 - POSIX account-home attestation uses `/etc/passwd`, absolute-path `getent`, or BSD `id -P`. Environments where all three are unavailable may report the account root as unresolved and should fail deployment policy until an OS-native identity provider is configured.
 - Windows command policy depends on the native PowerShell parser. Parser startup errors, syntax errors, dynamic invocation, encoded commands, `cmd.exe` nesting, and script execution fail closed. Windows device paths and alternate data streams are rejected from recoverable workspace scopes.
 - Windows filesystem deletion is block-only because this release does not restore-test ACLs, alternate streams, and reparse-point metadata exactly.
