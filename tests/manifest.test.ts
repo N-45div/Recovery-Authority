@@ -230,4 +230,42 @@ describe("recovery manifests", () => {
     expect(await Bun.file(join(firstRoot, "first.txt")).text()).toBe("first");
     expect(await Bun.file(join(secondRoot, "second.txt")).text()).toBe("changed after proof");
   });
+
+  test("journals outstanding work and resumes partial recovery", async () => {
+    const {
+      filesystem,
+      first,
+      second,
+      firstRoot,
+      secondRoot,
+      manifest,
+      approved,
+      coordinator,
+    } = await approvedFilesystemManifest();
+    await writeFile(join(secondRoot, "second.txt"), "changed after proof");
+    const originalCommit = filesystem.commit.bind(filesystem);
+    filesystem.commit = async (operationId, capability) => {
+      if (operationId === second.operation.id) {
+        await writeFile(join(firstRoot, "first.txt"), "later live state");
+      }
+      return originalCommit(operationId, capability);
+    };
+    const executions = [
+      { operationId: first.operation.id },
+      { operationId: second.operation.id },
+    ];
+
+    const partial = await coordinator.commit(manifest.id, approved.capability as string, executions);
+    expect(partial.status).toBe("partially-recovered");
+    expect(partial.outstandingOperationIds).toEqual([first.operation.id]);
+    expect(partial.failure).toContain("Recovery would overwrite live state");
+    expect(await Bun.file(join(firstRoot, "first.txt")).text()).toBe("later live state");
+
+    await rm(join(firstRoot, "first.txt"));
+    const resumed = await coordinator.recover(manifest.id, executions);
+    expect(resumed.status).toBe("compensated");
+    expect(resumed.outstandingOperationIds).toEqual([]);
+    expect(resumed.recoveredOperationIds).toEqual([first.operation.id]);
+    expect(await Bun.file(join(firstRoot, "first.txt")).text()).toBe("first");
+  });
 });
