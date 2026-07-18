@@ -15,6 +15,9 @@ const AuthorizationRecordSchema = z.object({
   expiresAt: z.string().datetime(),
   approvalDigest: z.string().nullable(),
   capability: z.string().nullable(),
+  source: z.enum(["individual", "manifest"]).default("individual"),
+  manifestId: z.string().uuid().nullable().default(null),
+  manifestProofDigest: z.string().nullable().default(null),
 });
 
 export type AuthorizationRecord = z.infer<typeof AuthorizationRecordSchema>;
@@ -60,6 +63,9 @@ export class AuthorizationRegistry {
       expiresAt: operation.expiresAt,
       approvalDigest: null,
       capability: null,
+      source: "individual",
+      manifestId: null,
+      manifestProofDigest: null,
     };
     await this.write(record);
     return record;
@@ -105,4 +111,3 @@ export async function createAuthorizationRegistry(dataDir: string): Promise<Auth
   const verifier = await PublicCapabilityVerifier.load(dataDir);
   return new AuthorizationRegistry(dataDir, store, verifier);
 }
-

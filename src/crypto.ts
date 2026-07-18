@@ -8,7 +8,13 @@ export function sha256(value: string | Uint8Array): string {
 }
 export const CapabilityClaimsSchema = z.object({
   operationId: z.string().uuid(),
-  kind: z.enum(["filesystem.delete", "sqlite.mutate", "git.reset-hard", "postgres.schema-mutate"]),
+  kind: z.enum([
+    "filesystem.delete",
+    "sqlite.mutate",
+    "git.reset-hard",
+    "postgres.schema-mutate",
+    "recovery.manifest",
+  ]),
   proofDigest: z.string(),
   stateWitness: z.string(),
   statementDigest: z.string().nullable().default(null),

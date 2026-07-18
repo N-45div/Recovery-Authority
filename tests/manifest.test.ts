@@ -3,8 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuthorizationRegistry } from "../src/authorization.js";
+import { PublicCapabilityVerifier } from "../src/crypto.js";
 import { createFilesystemRecoveryService } from "../src/filesystem.js";
 import { RecoveryManifestService } from "../src/manifest.js";
+import { ManifestAuthorizationRegistry } from "../src/manifest-authorization.js";
+import { createManifestApprovalBroker } from "../src/manifest-approval.js";
 import { ManifestStore } from "../src/manifest-store.js";
 import { initializeAuthority } from "../src/signer.js";
 import { OperationStore } from "../src/store.js";
@@ -98,5 +101,47 @@ describe("recovery manifests", () => {
       operationIds: [parent.operation.id, child.operation.id],
       reason: "overlap should fail",
     })).rejects.toThrow("overlapping filesystem scope");
+  });
+
+  test("one manifest confirmation derives exact child capabilities", async () => {
+    const { dataDir, approvals, filesystem, manifests } = await harness();
+    const firstRoot = await temporaryRoot("recovery-manifest-approval-first-");
+    const secondRoot = await temporaryRoot("recovery-manifest-approval-second-");
+    await writeFile(join(firstRoot, "first.txt"), "first");
+    await writeFile(join(secondRoot, "second.txt"), "second");
+    const first = await filesystem.prepare({
+      workspaceRoot: firstRoot,
+      paths: ["first.txt"],
+      reason: "first approved effect",
+      ttlSeconds: 300,
+    });
+    const second = await filesystem.prepare({
+      workspaceRoot: secondRoot,
+      paths: ["second.txt"],
+      reason: "second approved effect",
+      ttlSeconds: 300,
+    });
+    await approvals.request(first.operation);
+    await approvals.request(second.operation);
+    const manifest = await manifests.prepare({
+      operationIds: [first.operation.id, second.operation.id],
+      reason: "Approve both effects as one reviewed manifest",
+    });
+    const verifier = await PublicCapabilityVerifier.load(dataDir);
+    const manifestAuthorizations = new ManifestAuthorizationRegistry(dataDir, new ManifestStore(dataDir), verifier);
+    await manifestAuthorizations.request(manifest);
+    const broker = await createManifestApprovalBroker(dataDir);
+
+    await expect(broker.approve(manifest.id, "incorrect")).rejects.toThrow("must match proof prefix");
+    const approved = await broker.approve(manifest.id, manifest.proofDigest.slice(0, 12));
+    expect(approved.status).toBe("approved");
+    expect(verifier.verify(approved.capability as string).kind).toBe("recovery.manifest");
+    for (const operation of [first.operation, second.operation]) {
+      const child = await approvals.get(operation.id);
+      expect(child.status).toBe("approved");
+      expect(child.source).toBe("manifest");
+      expect(child.manifestId).toBe(manifest.id);
+      expect(verifier.verify(child.capability as string).operationId).toBe(operation.id);
+    }
   });
 });
