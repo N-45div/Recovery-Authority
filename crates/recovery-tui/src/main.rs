@@ -16,14 +16,16 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs, Wrap},
 };
 use recovery_core::{
-    AuthorizationRecord, AuthorizationStatus, HookEvent, OperationLedger, RecoveryStatus,
+    AuthorizationRecord, AuthorizationStatus, ConsequenceGraph, HookEvent, OperationLedger,
+    RecoveryStatus,
 };
 
-const TAB_NAMES: [&str; 6] = [
+const TAB_NAMES: [&str; 7] = [
     "MISSION",
     "EFFECTS",
     "RECOVERY",
     "AGENTS",
+    "GRAPH",
     "AUTHORITY",
     "RECEIPTS",
 ];
@@ -92,7 +94,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => app.next_tab(),
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => app.previous_tab(),
-                KeyCode::Char(value @ '1'..='6') => {
+                KeyCode::Char(value @ '1'..='7') => {
                     app.selected_tab = value.to_digit(10).unwrap_or(1) as usize - 1;
                 }
                 _ => {}
@@ -132,6 +134,13 @@ fn read_authorizations(data_dir: &Path) -> BTreeMap<String, AuthorizationRecord>
         .unwrap_or_default()
 }
 
+fn read_consequence_graph(data_dir: &Path) -> ConsequenceGraph {
+    fs::read_to_string(data_dir.join("consequence-graph.json"))
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
 fn render(frame: &mut Frame, app: &App) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
@@ -160,7 +169,14 @@ fn render(frame: &mut Frame, app: &App) {
     let operations = read_operations(&app.data_dir);
     let hook_events = read_hook_events(&app.data_dir);
     let authorizations = read_authorizations(&app.data_dir);
-    let (title, lines) = tab_content(app.selected_tab, &operations, &hook_events, &authorizations);
+    let graph = read_consequence_graph(&app.data_dir);
+    let (title, lines) = tab_content(
+        app.selected_tab,
+        &operations,
+        &hook_events,
+        &authorizations,
+        &graph,
+    );
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL).title(title))
@@ -168,7 +184,7 @@ fn render(frame: &mut Frame, app: &App) {
         areas[1],
     );
     frame.render_widget(
-        Line::from("left/right navigate  1-6 jump  q/esc quit"),
+        Line::from("left/right navigate  1-7 jump  q/esc quit"),
         areas[2],
     );
 }
@@ -178,13 +194,15 @@ fn tab_content(
     ledger: &OperationLedger,
     events: &[HookEvent],
     authorizations: &BTreeMap<String, AuthorizationRecord>,
+    graph: &ConsequenceGraph,
 ) -> (&'static str, Vec<Line<'static>>) {
     match selected_tab {
-        0 => mission_lines(ledger, events, authorizations),
+        0 => mission_lines(ledger, events, authorizations, graph),
         1 => effect_lines(events),
         2 => recovery_lines(ledger, authorizations),
         3 => agent_lines(events),
-        4 => authority_lines(),
+        4 => graph_lines(graph),
+        5 => authority_lines(),
         _ => receipt_lines(ledger, events, authorizations),
     }
 }
@@ -193,6 +211,7 @@ fn mission_lines(
     ledger: &OperationLedger,
     events: &[HookEvent],
     authorizations: &BTreeMap<String, AuthorizationRecord>,
+    graph: &ConsequenceGraph,
 ) -> (&'static str, Vec<Line<'static>>) {
     let blocked = events.iter().filter(|event| event.blocked).count();
     let proven = ledger
@@ -217,6 +236,14 @@ fn mission_lines(
     (
         " Mission status ",
         vec![
+            Line::from(vec![
+                Span::styled("POSTURE  ", posture_style(&graph.posture.level)),
+                Span::raw(if graph.posture.level.is_empty() {
+                    "UNKNOWN".to_string()
+                } else {
+                    graph.posture.level.to_uppercase()
+                }),
+            ]),
             Line::from(vec![
                 Span::styled("BLOCKED  ", Style::default().fg(Color::Red)),
                 Span::raw(blocked.to_string()),
@@ -245,6 +272,18 @@ fn mission_lines(
             Line::from("Destructive effects require a restore proof and separate human approval."),
         ],
     )
+}
+
+fn posture_style(level: &str) -> Style {
+    match level {
+        "protected" => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        "degraded" => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
 }
 
 fn active_agent_count(events: &[HookEvent]) -> usize {
@@ -348,6 +387,62 @@ fn recovery_lines(
         lines.push(Line::from("No restore-tested operations yet."));
     }
     (" Recovery operations ", lines)
+}
+
+fn graph_lines(graph: &ConsequenceGraph) -> (&'static str, Vec<Line<'static>>) {
+    if graph.schema_version == 0 {
+        return (
+            " Living consequence graph ",
+            vec![Line::from(
+                "No graph snapshot yet. Start a Codex session or call recovery_orient.",
+            )],
+        );
+    }
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("POSTURE  ", posture_style(&graph.posture.level)),
+            Span::raw(graph.posture.level.to_uppercase()),
+        ]),
+        Line::from(format!(
+            "{} nodes  {} edges  {} exact adapters",
+            graph.nodes.len(),
+            graph.edges.len(),
+            graph.posture.exact_adapters.len()
+        )),
+        Line::from(""),
+    ];
+    let labels = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node.label.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for edge in graph.edges.iter().take(14) {
+        let from = labels
+            .get(edge.from.as_str())
+            .copied()
+            .unwrap_or(edge.from.as_str());
+        let to = labels
+            .get(edge.to.as_str())
+            .copied()
+            .unwrap_or(edge.to.as_str());
+        lines.push(Line::from(format!(
+            "{}  {} -> {}  [{}]",
+            edge.relation, from, to, edge.state
+        )));
+    }
+    if graph.edges.is_empty() {
+        lines.push(Line::from(
+            "The graph has posture but no observed consequence edges yet.",
+        ));
+    }
+    if !graph.posture.limitations.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from("LIMITATIONS"));
+        for limitation in graph.posture.limitations.iter().take(4) {
+            lines.push(Line::from(format!("- {limitation}")));
+        }
+    }
+    (" Living consequence graph ", lines)
 }
 
 fn authority_lines() -> (&'static str, Vec<Line<'static>>) {

@@ -86,6 +86,46 @@ pub struct HookEvent {
     pub findings: Vec<HookFinding>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryPosture {
+    pub level: String,
+    pub hook_observed: bool,
+    pub independent_authority: bool,
+    pub platform: String,
+    pub exact_adapters: Vec<String>,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsequenceNode {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub state: String,
+    #[serde(default)]
+    pub attributes: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsequenceEdge {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub relation: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsequenceGraph {
+    pub schema_version: u32,
+    pub generated_at: Option<DateTime<Utc>>,
+    pub posture: RecoveryPosture,
+    pub nodes: Vec<ConsequenceNode>,
+    pub edges: Vec<ConsequenceEdge>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +159,16 @@ mod tests {
         assert_eq!(event.event.as_deref(), Some("SubagentStart"));
         assert_eq!(event.agent_id.as_deref(), Some("worker-42"));
         assert_eq!(event.tool_name, None);
+    }
+
+    #[test]
+    fn parses_living_consequence_graph_without_capabilities() {
+        let graph: ConsequenceGraph = serde_json::from_str(
+            r#"{"schemaVersion":1,"generatedAt":"2026-07-18T00:00:00Z","posture":{"level":"degraded","hookObserved":true,"independentAuthority":false,"platform":"linux","exactAdapters":["filesystem.delete"],"limitations":["host sandbox"]},"nodes":[{"id":"operation:1","kind":"operation","label":"filesystem.delete","state":"proven","attributes":{"operationId":"1"}}],"edges":[]}"#,
+        )
+        .expect("valid consequence graph");
+        assert_eq!(graph.posture.level, "degraded");
+        assert_eq!(graph.nodes[0].kind, "operation");
+        assert!(!graph.nodes[0].attributes.contains_key("capability"));
     }
 }
