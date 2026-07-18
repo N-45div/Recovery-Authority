@@ -1,0 +1,152 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { orientConsequences, projectConsequenceGraph, sliceConsequenceGraph } from "../src/consequence-graph.js";
+import { OperationStore } from "../src/store.js";
+
+const temporaryRoots: string[] = [];
+
+async function temporaryDataDir(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "recovery-consequence-"));
+  temporaryRoots.push(root);
+  return root;
+}
+
+afterEach(async () => {
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function seedFilesystemProof(dataDir: string, status: "pending" | "approved" = "pending"): Promise<string> {
+  const operationId = "11111111-1111-4111-8111-111111111111";
+  const expiresAt = new Date(Date.now() + 300_000).toISOString();
+  await new OperationStore(dataDir).put({
+    id: operationId,
+    kind: "filesystem.delete",
+    status: "proven",
+    workspaceRoot: "/workspace",
+    paths: ["cache"],
+    reason: "test consequence graph",
+    artifactDir: join(dataDir, "artifacts", operationId),
+    stateWitness: "state-witness",
+    proofDigest: "proof-digest",
+    createdAt: new Date().toISOString(),
+    expiresAt,
+    committedAt: null,
+    recoveredAt: null,
+    failure: null,
+    records: [{ path: "cache", kind: "directory", mode: 0o755, sha256: null, symlinkTarget: null }],
+  });
+  await mkdir(join(dataDir, "approvals"), { recursive: true });
+  await writeFile(join(dataDir, "approvals", `${operationId}.json`), JSON.stringify({
+    operationId,
+    status,
+    proofDigest: "proof-digest",
+    requestedAt: new Date().toISOString(),
+    approvedAt: status === "approved" ? new Date().toISOString() : null,
+    expiresAt,
+    approvalDigest: status === "approved" ? "approval-digest" : null,
+    capability: status === "approved" ? "redacted-from-graph" : null,
+  }));
+  return operationId;
+}
+
+async function observeHook(dataDir: string): Promise<void> {
+  await writeFile(join(dataDir, "hook-events.jsonl"), `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    event: "SessionStart",
+    sessionId: "session-1",
+    turnId: null,
+    agentId: null,
+    agentType: null,
+    commandDigest: null,
+    blocked: false,
+    findings: [],
+  })}\n`);
+}
+
+describe("living consequence graph", () => {
+  test("projects restore proofs, affected resources, and local hook posture", async () => {
+    const dataDir = await temporaryDataDir();
+    await seedFilesystemProof(dataDir);
+    await observeHook(dataDir);
+
+    const graph = await projectConsequenceGraph(dataDir);
+    expect(graph.posture.level).toBe("degraded");
+    expect(graph.posture.hookObserved).toBe(true);
+    expect(graph.nodes.some((node) => node.kind === "resource" && node.label === "/workspace:cache")).toBe(true);
+    expect(graph.edges.some((edge) => edge.relation === "protected_by" && edge.state === "restore-tested")).toBe(true);
+    expect(await Bun.file(join(dataDir, "consequence-graph.json")).exists()).toBe(true);
+  });
+
+  test("distinguishes a fresh recovery proof from human authority", async () => {
+    const dataDir = await temporaryDataDir();
+    const operationId = await seedFilesystemProof(dataDir);
+    const graph = await projectConsequenceGraph(dataDir);
+
+    const orientation = orientConsequences(graph, { command: "rm -rf cache", operationId, shellDialect: "posix" });
+    expect(orientation.destructive).toBe(true);
+    expect(orientation.executable).toBe(false);
+    expect(orientation.readiness.recoveryCoverage).toBe(2);
+    expect(orientation.readiness.authority).toBe(1);
+    expect(orientation.safeCut).toContainEqual(expect.objectContaining({ requirement: "human_approval", satisfied: false }));
+  });
+
+  test("keeps the raw command non-executable after approval", async () => {
+    const dataDir = await temporaryDataDir();
+    const operationId = await seedFilesystemProof(dataDir, "approved");
+    const graph = await projectConsequenceGraph(dataDir);
+
+    const orientation = orientConsequences(graph, { command: "rm -rf cache", operationId, shellDialect: "posix" });
+    expect(orientation.executable).toBe(false);
+    expect(orientation.readiness.authority).toBe(2);
+    expect(orientation.safeCut).toContainEqual(expect.objectContaining({ requirement: "exact_commit_tool", satisfied: true }));
+  });
+
+  test("marks unsupported and opaque effects as uncertainty", async () => {
+    const dataDir = await temporaryDataDir();
+    const graph = await projectConsequenceGraph(dataDir);
+    const orientation = orientConsequences(graph, { command: "docker volume prune -f", shellDialect: "posix" });
+
+    expect(orientation.readiness.blastRadius).toBe(4);
+    expect(orientation.readiness.recoveryCoverage).toBe(0);
+    expect(orientation.readiness.uncertainty).toBe(1);
+    expect(orientation.safeCut).toContainEqual(expect.objectContaining({ requirement: "adapter_required" }));
+  });
+
+  test("does not transfer proof readiness across operations of the same category", async () => {
+    const dataDir = await temporaryDataDir();
+    await seedFilesystemProof(dataDir, "approved");
+    const graph = await projectConsequenceGraph(dataDir);
+
+    const orientation = orientConsequences(graph, { command: "rm -rf unrelated", shellDialect: "posix" });
+    expect(orientation.readiness.recoveryCoverage).toBe(1);
+    expect(orientation.readiness.authority).toBe(0);
+    expect(orientation.safeCut).toContainEqual(expect.objectContaining({ requirement: "prepare_proof" }));
+  });
+
+  test("exposes the missing manifest edge for multi-effect commands", async () => {
+    const dataDir = await temporaryDataDir();
+    const graph = await projectConsequenceGraph(dataDir);
+    const orientation = orientConsequences(graph, {
+      command: "rm -rf cache && sqlite3 app.db 'DELETE FROM users'",
+      shellDialect: "posix",
+    });
+
+    expect(orientation.safeCut[0]).toMatchObject({ category: "multi-effect", requirement: "split_manifest" });
+    expect(orientation.findings.map((finding) => finding.category)).toEqual(["filesystem.delete", "sqlite.mutate"]);
+  });
+
+  test("returns a bounded operation neighborhood", async () => {
+    const dataDir = await temporaryDataDir();
+    const operationId = await seedFilesystemProof(dataDir);
+    const graph = await projectConsequenceGraph(dataDir);
+    const slice = sliceConsequenceGraph(graph, { operationId, maxNodes: 20 });
+
+    expect(slice.nodes.some((node) => node.attributes.operationId === operationId)).toBe(true);
+    expect(slice.nodes.length).toBeLessThanOrEqual(20);
+    expect(slice.edges.every((edge) =>
+      slice.nodes.some((node) => node.id === edge.from) && slice.nodes.some((node) => node.id === edge.to),
+    )).toBe(true);
+  });
+});

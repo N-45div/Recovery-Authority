@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { authorityKeyDir } from "./crypto.js";
 import { platformCapabilities } from "./platform.js";
 import { initializeAuthority } from "./signer.js";
+import { evaluateConsequenceCorpus } from "./consequence-eval.js";
+import { projectConsequenceGraph } from "./consequence-graph.js";
 
 function pluginRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,7 +50,14 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify(platformCapabilities(), null, 2)}\n`);
     return;
   }
-  throw new Error("Usage: recovery-authority <hook|mcp|approve|init|doctor> [arguments]");
+  if (command === "evaluate") {
+    const dataDir = process.env.RECOVERY_AUTHORITY_DATA_DIR;
+    if (!dataDir) throw new Error("Recovery Authority evaluation requires PLUGIN_DATA or RECOVERY_AUTHORITY_DATA_DIR");
+    const graph = await projectConsequenceGraph(resolve(dataDir));
+    process.stdout.write(`${JSON.stringify(evaluateConsequenceCorpus(graph), null, 2)}\n`);
+    return;
+  }
+  throw new Error("Usage: recovery-authority <hook|mcp|approve|init|doctor|evaluate> [arguments]");
 }
 
 if (import.meta.main) await main();

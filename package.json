@@ -1,6 +1,6 @@
 {
   "name": "recovery-authority",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
@@ -9,6 +9,7 @@
     "approve": "bun run ./src/cli.ts approve",
     "sandbox": "bun run ./src/sandbox.ts sandbox",
     "demo": "bun ./dist/demo.js",
+    "evaluate": "RECOVERY_AUTHORITY_DATA_DIR=.recovery-authority bun run ./src/cli.ts evaluate",
     "check": "tsc --noEmit",
     "dev": "bun run ./src/server.ts",
     "test": "bun test",
@@ -17,7 +18,7 @@
     "test:bundle": "node ./scripts/smoke-server-boundary.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.5",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "bash-parser": "^0.5.0",
     "pgsql-ast-parser": "^12.0.2",
     "zod": "^3.25.76"
