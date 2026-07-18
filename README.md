@@ -34,6 +34,8 @@ The immediate value is safer long-horizon autonomy with less blind approval: dev
 
 ## How it works
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete trust-boundary, protocol, Recovery Manifest, consequence-graph, and durable-state diagrams.
+
 ```text
 agent + descendants
         | Codex hook + typed MCP over stdio
