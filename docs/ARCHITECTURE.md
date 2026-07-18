@@ -39,6 +39,14 @@ host
 6. The MCP worker verifies the signature using only the public key, re-witnesses live state, and executes the exact prepared effect.
 7. The ledger records commit and recovery evidence.
 
+## Consequence graph
+
+`consequence-graph.json` is a deterministic projection of authority-owned operations and approvals plus sanitized lifecycle receipts. Nodes represent sessions, delegated agents, operations, effects, resources, restore proofs, authorizations, and receipts. Edges represent delegation, proposal, impact, recovery coverage, approval, denial, and observed outcomes.
+
+The graph is intentionally not a policy engine or capability store. It cannot authorize an operation and does not contain private keys, capability tokens, raw command text, or raw goals. The MCP server computes readiness and minimum-safe-cut guidance from the complete projection, then returns a bounded neighborhood to control token use. Existing proof-bound commit methods remain the only execution path.
+
+In direct mode, hook and MCP processes refresh the local projection atomically. In Linux isolation mode, the host authority daemon refreshes it after receiving sanitized hook events, while model-controlled processes cannot write authority state. Subagents receive posture context but no transferable destructive authority.
+
 The MCP socket does not add a second authorization protocol. It transports the existing MCP contract across the mount boundary, keeping the model-facing plugin portable while moving durable authority out of the model process. The separate audit socket accepts bounded JSON receipts without raw command text; those receipts are useful telemetry but are not trusted as cryptographic actor identity.
 
 ## Platform architecture

@@ -1,7 +1,7 @@
 {
   "name": "recovery-authority",
-  "version": "0.9.0+codex.20260717060931",
-  "description": "Require proven recovery before Codex performs destructive operations.",
+  "version": "0.10.0+codex.20260718164911",
+  "description": "Give Codex consequence awareness and require proven recovery before destructive operations.",
   "author": {
     "name": "Recovery Authority",
     "url": "https://github.com/N-45div/Recovery-Authority"
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Recovery Authority",
     "shortDescription": "Prove recovery before destructive actions",
-    "longDescription": "Restore-tests destructive filesystem, SQLite, PostgreSQL, and Git effects, then requires separate human approval before releasing a short-lived capability.",
+    "longDescription": "Maps consequences, recovery coverage, uncertainty, and authority; restore-tests supported destructive effects before releasing one human-approved capability.",
     "developerName": "Recovery Authority",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/N-45div/Recovery-Authority",
@@ -29,6 +29,7 @@
     ],
     "defaultPrompt": [
       "Safely delete these files with a recovery proof.",
+      "Orient to the consequences of this cleanup command before running it.",
       "Prove this PostgreSQL deletion can be recovered before running it.",
       "Show operations that are waiting for my approval.",
       "Show the recovery status for this operation."

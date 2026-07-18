@@ -26,6 +26,8 @@ No model actor is trusted to classify its own command as safe. A destructive eff
 9. **The model process does not hold signing authority.** MCP services load only the public verifier; the private key is loaded only by the separate terminal approval process.
 10. **Sandboxed actors cannot modify authority state.** In Linux sandbox mode, the daemon, ledger, artifacts, and key directory remain outside the agent mount namespace and are reachable only through typed MCP messages.
 11. **The authority cannot be redirected to host paths.** Filesystem, SQLite, and Git prepare requests must use the canonical workspace selected by the sandbox runner.
+12. **Graph awareness is not authority.** Consequence nodes, readiness vectors, and minimum-safe-cut guidance cannot mint capabilities, override hook denial, or make a raw command executable.
+13. **Unknown edges remain unknown.** Missing dependency data lowers graph closure; it is never interpreted as proof that an effect has no downstream impact.
 
 ## Evidence-backed purge families
 
@@ -76,6 +78,7 @@ The root filesystem is mounted read-only and the selected repository is rebound 
 - The selected workspace is writable by design. The sandbox contains its blast radius; hook interception and recovery capabilities govern destructive effects within that workspace.
 - The Unix socket is an availability boundary, not a secret. A sandboxed process can disconnect its own proxy, but direct socket access exposes only the same typed MCP methods and no signing operation.
 - Hook lifecycle records are operational telemetry, not cryptographic actor attestations. A process inside the sandbox can forge or suppress its own audit-socket events; recovery operations, approvals, and capabilities remain authority-owned.
+- The consequence graph is a derived operational view and may be stale between receipts. Enforcement always re-reads authority-owned operation state and live resource witnesses instead of trusting graph state.
 - POSIX account-home attestation uses `/etc/passwd`, absolute-path `getent`, or BSD `id -P`. Environments where all three are unavailable may report the account root as unresolved and should fail deployment policy until an OS-native identity provider is configured.
 - Windows command policy depends on the native PowerShell parser. Parser startup errors, syntax errors, dynamic invocation, encoded commands, `cmd.exe` nesting, and script execution fail closed. Windows device paths and alternate data streams are rejected from recoverable workspace scopes.
 - Windows filesystem deletion is block-only because this release does not restore-test ACLs, alternate streams, and reparse-point metadata exactly.

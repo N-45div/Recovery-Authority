@@ -48,6 +48,27 @@ proof-bound capability -> guarded commit -> receipt -> exact restore
 
 The model-facing MCP bundle contains verification code but no signing implementation. The private Ed25519 key is loaded only by the separate terminal approval path. The Linux runner keeps the authority daemon, ledger, artifacts, and signing directory outside the agent's mount namespace.
 
+## Living consequence graph
+
+Recovery Authority gives the agent a bounded, machine-readable view of consequences without trusting the model to authorize itself. `recovery_orient` parses a proposed command, joins it to current proof, approval, operation, resource, session, and subagent nodes, and returns:
+
+- a readiness vector for blast radius, recovery coverage, authority, dependency closure, uncertainty, and proof freshness;
+- the minimum safe cut: the missing adapter, proof, approval, or manifest edge that prevents execution;
+- a small graph neighborhood rather than the complete ledger or raw transcript.
+
+```text
+session -> agent -> proposed effect -> affected resource
+                              |              |
+                              v              v
+                         authorization   recovery proof
+                              |              |
+                              +-----> exact commit -> receipt
+```
+
+The graph is derived evidence, not an authority source. It never contains a capability token, never turns a raw destructive command into an approved command, and never interprets a missing dependency edge as proof that no dependency exists. Proof and approval readiness are reported only when orientation includes the exact operation ID; category similarity cannot transfer authority between operations. Goals and commands are returned and persisted as SHA-256 digests rather than raw text. Only an exact adapter, successful restore drill, separate human approval, signed capability, and live state re-witness can authorize a commit.
+
+The lifecycle hook refreshes this model at session start, before and after compaction, during native subagent lifecycle changes, at permission escalation, and after supported tool calls. Context compaction therefore discards chat tokens without discarding authority state.
+
 ## Five-minute judge path
 
 This path uses bundled `dist/` artifacts, creates its own sample data, and does not rebuild the project. Requirements are Bun 1.3+ and Docker; Docker can pull `postgres:17-alpine` on first use.
@@ -96,7 +117,7 @@ The Git adapter snapshots `HEAD`, its symbolic ref, the raw index, tracked modif
 
 The PostgreSQL adapter parses one destructive statement into an AST, limits direct and referenced relations to an authorized schema, and takes a full logical database dump so database-local cascades are recoverable. It restores the dump into a temporary database, reproduces the original witness, executes the exact SQL there, and binds the expected post-mutation witness before issuing a capability. Live commit must produce the same witness. Connection credentials are supplied per call and are never written to the operation ledger.
 
-The plugin also bundles a syntax-aware Codex `PreToolUse` hook. It parses Bash with `bash-parser` and Windows commands with PowerShell's native AST parser, then blocks recognized destructive effects before execution, including nested commands and common wrappers. Prepare tools return a pending authorization and an OS-native separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
+The plugin also bundles syntax-aware Codex lifecycle hooks. `PreToolUse` and `PermissionRequest` parse Bash with `bash-parser` and Windows commands with PowerShell's native AST parser, then block recognized destructive effects before execution or elevation, including nested commands and common wrappers. `SessionStart`, `PreCompact`, `PostCompact`, `PostToolUse`, `SubagentStart`, and `SubagentStop` maintain local consequence receipts and compact posture context. Prepare tools return a pending authorization and an OS-native separate-terminal approval command, not a capability. The coding-agent hook blocks attempts to invoke that approval command itself.
 
 The same plugin registers native subagent lifecycle hooks. Each delegated executor is logged with the parent session, agent ID, type, permission mode, model, turn, and lifecycle state, then surfaced in the TUI. Enforcement remains actor-independent because Codex does not include `agent_id` in every turn-scoped tool hook. See the [threat model](docs/THREAT_MODEL.md) for the exact trust boundaries and evidence corpus.
 
@@ -220,6 +241,7 @@ bun run test:hook
 bun run test:mcp
 bun run test:bundle
 bun run check
+bun run evaluate
 bun run build
 cargo test --workspace
 ```
@@ -230,10 +252,12 @@ Run the local TUI against a plugin data directory:
 cargo run -p recovery-authority -- tui --data-dir .recovery-authority
 ```
 
-Navigate with left/right or `1`-`6`. The views show mission status, intercepted effects, recovery operations, delegated agents, adapter coverage, and proof receipts.
+Navigate with left/right or `1`-`7`. The views show mission status, intercepted effects, recovery operations, delegated agents, the living consequence graph, adapter coverage, and proof receipts.
 
 ## MCP tools
 
+- `recovery_orient`
+- `recovery_get_consequence_graph`
 - `recovery_inspect_runtime`
 - `recovery_prepare_filesystem_delete`
 - `recovery_commit_filesystem_delete`
@@ -253,6 +277,8 @@ Navigate with left/right or `1`-`6`. The views show mission status, intercepted 
 ## Shell policy
 
 The hook detects direct and interpreter-mediated filesystem deletion, patch-file deletion, mutable identity-root overrides, destructive Git operations, rsync/rclone deletion, container and volume purge, destructive SQL and framework resets, approval-command execution, shell-launched agents, Terraform/Kubernetes/cloud deletion, PowerShell dynamic invocation, Windows disk/volume commands, and opaque scripts. Denial receipts store a SHA-256 command digest and structured findings rather than the raw command. The regression corpus preserves source URLs and expected categories without executing destructive fixtures.
+
+`bun run evaluate` replays that corpus through the consequence engine and reports category recall, fail-closed rate, adapter coverage, and safe-cut requirements. It never executes or prints the destructive fixture commands.
 
 ## OpenAI Build Week
 
