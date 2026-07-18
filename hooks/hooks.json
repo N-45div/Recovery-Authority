@@ -1,5 +1,19 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "timeout": 10,
+            "statusMessage": "Inspecting recovery posture"
+          }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "matcher": ".*",
@@ -38,6 +52,62 @@
             "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Checking recovery authority"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "^(Bash|Shell|PowerShell|exec_command|run_terminal_command|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "timeout": 10,
+            "statusMessage": "Checking recovery before elevation"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Bash|Shell|PowerShell|exec_command|run_terminal_command|apply_patch|Edit|Write|mcp__recovery.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "timeout": 10,
+            "statusMessage": "Recording consequence receipt"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "timeout": 10,
+            "statusMessage": "Persisting recovery graph"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "timeout": 10,
+            "statusMessage": "Restoring recovery context"
           }
         ]
       }

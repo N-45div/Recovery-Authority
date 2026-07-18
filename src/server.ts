@@ -9,6 +9,8 @@ import {
   CommitGitResetHardInput,
   CommitPostgresMutationInput,
   CommitSqliteMutationInput,
+  ConsequenceGraphInput,
+  ConsequenceOrientationInput,
   OperationInput,
   PrepareFilesystemDeleteInput,
   PrepareGitResetHardInput,
@@ -17,6 +19,7 @@ import {
   RestorePostgresMutationInput,
   RuntimeInspectionInput,
 } from "./contracts.js";
+import { orientConsequences, projectConsequenceGraph, sliceConsequenceGraph } from "./consequence-graph.js";
 import { AuthorizationRegistry } from "./authorization.js";
 import { authorityKeyDir, PublicCapabilityVerifier } from "./crypto.js";
 import { FilesystemRecoveryService } from "./filesystem.js";
@@ -63,10 +66,66 @@ function authorizationView<T extends { operationId: string; status: string }>(au
 }
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.9.0" },
+  { name: "recovery-authority", version: "0.10.0" },
   {
     instructions:
-      "Use Recovery Authority for destructive filesystem, SQLite, PostgreSQL, and Git hard-reset operations. Prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Hook coverage applies only when the bundled hook is trusted.",
+      "Call recovery_orient before destructive or delegated work to inspect consequence coverage, uncertainty, and the minimum safe cut. For supported filesystem, SQLite, PostgreSQL, and Git hard-reset effects, prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Raw destructive commands remain blocked even after approval. Hook coverage applies only when the bundled hook is trusted.",
+  },
+);
+
+server.registerTool(
+  "recovery_orient",
+  {
+    title: "Orient to consequences and authority",
+    description: "Return a compact readiness vector, minimum missing recovery and authority edges, and a bounded slice of the living consequence graph before acting.",
+    inputSchema: ConsequenceOrientationInput.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = ConsequenceOrientationInput.parse(input);
+    const graph = await projectConsequenceGraph(dataDir);
+    const orientation = orientConsequences(graph, {
+      ...(parsed.goal ? { goal: parsed.goal } : {}),
+      ...(parsed.command ? { command: parsed.command } : {}),
+      ...(parsed.operationId ? { operationId: parsed.operationId } : {}),
+      shellDialect: parsed.shellDialect,
+    });
+    const result = {
+      ...orientation,
+      graph: sliceConsequenceGraph(graph, {
+        ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
+        ...(parsed.operationId ? { operationId: parsed.operationId } : {}),
+        maxNodes: parsed.maxNodes,
+      }),
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_get_consequence_graph",
+  {
+    title: "Read the living consequence graph",
+    description: "Read a bounded operation, session, or effect neighborhood without exposing capability tokens or raw command text.",
+    inputSchema: ConsequenceGraphInput.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = ConsequenceGraphInput.parse(input);
+    const graph = await projectConsequenceGraph(dataDir);
+    const result = sliceConsequenceGraph(graph, {
+      ...(parsed.operationId ? { operationId: parsed.operationId } : {}),
+      ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
+      ...(parsed.category ? { category: parsed.category } : {}),
+      maxNodes: parsed.maxNodes,
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
   },
 );
 

@@ -138,4 +138,69 @@ describe("shell policy", () => {
     });
     expect(JSON.stringify(decision.output)).toContain("no independent destructive authority");
   });
+
+  test("injects graph orientation guidance at session start", () => {
+    const decision = evaluateHook({
+      hook_event_name: "SessionStart",
+      session_id: "session-1",
+      cwd: "/workspace",
+      source: "startup",
+      permission_mode: "default",
+    });
+
+    expect(decision.output).toMatchObject({
+      hookSpecificOutput: { hookEventName: "SessionStart" },
+    });
+    expect(JSON.stringify(decision.output)).toContain("recovery_orient");
+  });
+
+  test("denies destructive elevation through PermissionRequest", () => {
+    const decision = evaluateHook({
+      hook_event_name: "PermissionRequest",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: "/workspace",
+      tool_name: "Bash",
+      tool_input: { command: "docker volume prune -f", description: "clean Docker" },
+      permission_mode: "default",
+    });
+
+    expect(decision.blocked).toBe(true);
+    expect(decision.output).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny" },
+      },
+    });
+  });
+
+  test("records but does not retroactively block PostToolUse", () => {
+    const decision = evaluateHook({
+      hook_event_name: "PostToolUse",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: "/workspace",
+      tool_name: "Bash",
+      tool_input: { command: "rm -rf cache" },
+      tool_response: { output: "", exit_code: 0 },
+    });
+
+    expect(decision.blocked).toBe(false);
+    expect(decision.findings[0]?.category).toBe("filesystem.delete");
+    expect(decision.output).toBeNull();
+  });
+
+  test("reinjects graph orientation after compaction", () => {
+    const decision = evaluateHook({
+      hook_event_name: "PostCompact",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      cwd: "/workspace",
+      trigger: "auto",
+    });
+
+    expect(decision.output).toMatchObject({
+      hookSpecificOutput: { hookEventName: "PostCompact" },
+    });
+  });
 });

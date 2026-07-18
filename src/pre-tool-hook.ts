@@ -5,9 +5,19 @@ import { z } from "zod";
 import { sha256 } from "./crypto.js";
 import { analyzeShellCommand, type RiskFinding } from "./shell-policy.js";
 import { analyzePowerShellCommand } from "./powershell-policy.js";
+import { projectConsequenceGraph, type ConsequenceGraph } from "./consequence-graph.js";
 
 const HookInput = z.object({
-  hook_event_name: z.enum(["PreToolUse", "SubagentStart", "SubagentStop"]),
+  hook_event_name: z.enum([
+    "SessionStart",
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+    "SubagentStart",
+    "SubagentStop",
+  ]),
   session_id: z.string().optional(),
   turn_id: z.string().optional(),
   transcript_path: z.string().nullable().optional(),
@@ -15,9 +25,13 @@ const HookInput = z.object({
   model: z.string().optional(),
   permission_mode: z.string().optional(),
   tool_name: z.string().optional(),
+  tool_use_id: z.string().optional(),
   tool_input: z.record(z.unknown()).optional(),
+  tool_response: z.unknown().optional(),
   agent_id: z.string().optional(),
   agent_type: z.string().optional(),
+  source: z.string().optional(),
+  trigger: z.string().optional(),
 });
 
 type HookInput = z.infer<typeof HookInput>;
@@ -72,7 +86,7 @@ function analyzeFileTool(toolName: string, toolInput: Record<string, unknown>): 
   return [];
 }
 
-function deny(findings: RiskFinding[], command: string | null): HookDecision {
+function denialReason(findings: RiskFinding[]): string {
   const categories = [...new Set(findings.map((item) => item.category))];
   const categorySet = new Set(categories);
   const exactAdapterAvailable = findings.every((item) => item.adapterAvailable);
@@ -88,7 +102,11 @@ function deny(findings: RiskFinding[], command: string | null): HookDecision {
   } else {
     nextStep = "No exact recovery adapter covers every detected effect. Do not retry through another tool, interpreter, agent, or wrapper; narrow the operation or ask the user for a supported recovery plan.";
   }
-  const reason = `Recovery Authority blocked this effect before execution. Detected: ${categories.join(", ")}. ${nextStep}`;
+  return `Recovery Authority blocked this effect before execution. Detected: ${categories.join(", ")}. ${nextStep}`;
+}
+
+function deny(findings: RiskFinding[], command: string | null): HookDecision {
+  const reason = denialReason(findings);
 
   return {
     blocked: true,
@@ -105,8 +123,41 @@ function deny(findings: RiskFinding[], command: string | null): HookDecision {
   };
 }
 
+function denyPermission(findings: RiskFinding[], command: string | null): HookDecision {
+  const reason = denialReason(findings);
+  return {
+    blocked: true,
+    command,
+    findings,
+    output: {
+      systemMessage: reason,
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: reason },
+      },
+    },
+  };
+}
+
+function lifecycleOutput(event: "SessionStart" | "PostCompact", context: string): Record<string, unknown> {
+  return {
+    hookSpecificOutput: {
+      hookEventName: event,
+      additionalContext: context,
+    },
+  };
+}
+
 export function evaluateHook(rawInput: unknown): HookDecision {
   const input = HookInput.parse(rawInput);
+  if (input.hook_event_name === "SessionStart") {
+    return {
+      blocked: false,
+      command: null,
+      findings: [],
+      output: lifecycleOutput("SessionStart", "Recovery Authority is active. Call recovery_orient before destructive or delegated work; raw destructive commands never inherit authority from a prepared proof."),
+    };
+  }
   if (input.hook_event_name === "SubagentStart") {
     const agentLabel = input.agent_id ?? "unknown";
     const context = `Recovery Authority registered delegated agent ${agentLabel}. This agent receives no independent destructive authority. Destructive effects remain blocked until one exact restore-tested operation receives separate human approval.`;
@@ -124,12 +175,25 @@ export function evaluateHook(rawInput: unknown): HookDecision {
     };
   }
   if (input.hook_event_name === "SubagentStop") {
+    return { blocked: false, command: null, findings: [], output: { continue: true } };
+  }
+  if (input.hook_event_name === "PreCompact") {
     return { blocked: false, command: null, findings: [], output: null };
+  }
+  if (input.hook_event_name === "PostCompact") {
+    return {
+      blocked: false,
+      command: null,
+      findings: [],
+      output: lifecycleOutput("PostCompact", "Recovery Authority retained the living consequence graph outside model context. Re-orient before continuing destructive work."),
+    };
   }
 
   const command = commandFrom(input);
   const fileFindings = input.tool_name && input.tool_input ? analyzeFileTool(input.tool_name, input.tool_input) : [];
-  if (fileFindings.length > 0) return deny(fileFindings, null);
+  if (fileFindings.length > 0) {
+    return input.hook_event_name === "PermissionRequest" ? denyPermission(fileFindings, null) : deny(fileFindings, null);
+  }
   if (!command) return { blocked: false, command: null, findings: [], output: null };
 
   const dialect = process.env.RECOVERY_AUTHORITY_SHELL_DIALECT ?? (
@@ -139,11 +203,14 @@ export function evaluateHook(rawInput: unknown): HookDecision {
     ? analyzePowerShellCommand(command)
     : analyzeShellCommand(command);
   if (findings.length === 0) return { blocked: false, command, findings, output: null };
+  if (input.hook_event_name === "PostToolUse") {
+    return { blocked: false, command, findings, output: null };
+  }
+  if (input.hook_event_name === "PermissionRequest") return denyPermission(findings, command);
   return deny(findings, command);
 }
 
-async function recordDecision(input: HookInput, decision: HookDecision): Promise<void> {
-  const dataDir = resolve(process.env.PLUGIN_DATA ?? process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+async function recordDecision(input: HookInput, decision: HookDecision, dataDir: string): Promise<void> {
   const event = {
     timestamp: new Date().toISOString(),
     event: input.hook_event_name,
@@ -155,7 +222,11 @@ async function recordDecision(input: HookInput, decision: HookDecision): Promise
     model: input.model ?? null,
     cwd: input.cwd,
     toolName: input.tool_name ?? null,
+    toolUseId: input.tool_use_id ?? null,
     commandDigest: decision.command ? sha256(decision.command) : null,
+    resultDigest: input.tool_response === undefined ? null : sha256(JSON.stringify(input.tool_response)),
+    source: input.source ?? null,
+    trigger: input.trigger ?? null,
     blocked: decision.blocked,
     findings: decision.findings,
   };
@@ -178,12 +249,28 @@ async function recordDecision(input: HookInput, decision: HookDecision): Promise
   await appendFile(resolve(dataDir, "hook-events.jsonl"), `${JSON.stringify(event)}\n`, { mode: 0o600 });
 }
 
+function graphContext(graph: ConsequenceGraph): string {
+  const pending = graph.nodes.filter((node) => node.kind === "authorization" && node.state === "pending").length;
+  const activeAgents = graph.nodes.filter((node) => node.kind === "agent" && node.state === "active").length;
+  return `Recovery posture: ${graph.posture.level}. Exact adapters: ${graph.posture.exactAdapters.join(", ") || "none"}. Pending approvals: ${pending}. Active delegated agents: ${activeAgents}. Call recovery_orient for the minimum safe cut before destructive work.`;
+}
+
 export async function runHook(): Promise<void> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   const rawInput = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   const parsedInput = HookInput.parse(rawInput);
   const decision = evaluateHook(parsedInput);
-  await recordDecision(parsedInput, decision).catch(() => undefined);
+  const dataDir = resolve(process.env.PLUGIN_DATA ?? process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
+  await recordDecision(parsedInput, decision, dataDir).catch(() => undefined);
+  const graph = await projectConsequenceGraph(dataDir).catch(() => null);
+  if (graph && parsedInput.hook_event_name === "SessionStart") {
+    decision.output = lifecycleOutput("SessionStart", graphContext(graph));
+  } else if (graph && parsedInput.hook_event_name === "PostCompact") {
+    decision.output = lifecycleOutput("PostCompact", graphContext(graph));
+  } else if (graph && parsedInput.hook_event_name === "SubagentStart" && decision.output) {
+    const output = decision.output.hookSpecificOutput as Record<string, unknown>;
+    output.additionalContext = `${String(output.additionalContext)} ${graphContext(graph)}`;
+  }
   if (decision.output) process.stdout.write(`${JSON.stringify(decision.output)}\n`);
 }

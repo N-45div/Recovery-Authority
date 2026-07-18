@@ -105,8 +105,10 @@ try {
       "recovery_commit_postgres_mutation",
       "recovery_commit_sqlite_mutation",
       "recovery_get_authorization",
+      "recovery_get_consequence_graph",
       "recovery_get_operation",
       "recovery_inspect_runtime",
+      "recovery_orient",
       "recovery_prepare_filesystem_delete",
       "recovery_prepare_git_reset_hard",
       "recovery_prepare_postgres_mutation",
@@ -121,6 +123,15 @@ try {
     tools.tools.find((tool) => tool.name === "recovery_commit_filesystem_delete").annotations.destructiveHint,
     true,
   );
+
+  const orientation = await client.callTool({
+    name: "recovery_orient",
+    arguments: { goal: "remove disposable cache", command: "rm -rf cache", shellDialect: "posix" },
+  });
+  assert.equal(orientation.structuredContent.destructive, true);
+  assert.equal(orientation.structuredContent.executable, false);
+  assert.equal(orientation.structuredContent.safeCut[0].requirement, "prepare_proof");
+  assert.equal(orientation.structuredContent.graph.schemaVersion, 1);
 
   const runtime = await client.callTool({
     name: "recovery_inspect_runtime",
@@ -148,6 +159,12 @@ try {
   });
   const preparedOutput = prepared.structuredContent;
   assert.equal(preparedOutput.operation.status, "proven");
+  const graph = await client.callTool({
+    name: "recovery_get_consequence_graph",
+    arguments: { operationId: preparedOutput.operation.id },
+  });
+  assert.ok(graph.structuredContent.nodes.some((node) => node.kind === "proof"));
+  assert.ok(graph.structuredContent.edges.some((edge) => edge.relation === "protected_by"));
   const filesystemCapability = await approve(preparedOutput);
 
   await client.callTool({

@@ -82,6 +82,15 @@ try {
     tool_input: { command: "git status --short" },
     permission_mode: "default",
   };
+  const session = await invoke({
+    hook_event_name: "SessionStart",
+    session_id: "root-session",
+    cwd: pluginRoot,
+    source: "startup",
+    permission_mode: "default",
+  });
+  assert.equal(session.hookSpecificOutput.hookEventName, "SessionStart");
+  assert.match(session.hookSpecificOutput.additionalContext, /Recovery posture:/);
   const unavailable = await invokeBootstrap(safePayload);
   assert.equal(unavailable.status, 0, unavailable.stderr);
   assert.equal(unavailable.stdout, "");
@@ -116,6 +125,27 @@ try {
   assert.equal(patch.hookSpecificOutput.permissionDecision, "deny");
   assert.match(patch.hookSpecificOutput.permissionDecisionReason, /filesystem\.delete/);
 
+  const permission = await invoke({
+    hook_event_name: "PermissionRequest",
+    session_id: "root-session",
+    turn_id: "root-turn",
+    cwd: pluginRoot,
+    tool_name: "Bash",
+    tool_input: { command: "docker volume prune -f" },
+    permission_mode: "default",
+  });
+  assert.equal(permission.hookSpecificOutput.decision.behavior, "deny");
+
+  const compacted = await invoke({
+    hook_event_name: "PostCompact",
+    session_id: "root-session",
+    turn_id: "root-turn",
+    cwd: pluginRoot,
+    trigger: "auto",
+  });
+  assert.equal(compacted.hookSpecificOutput.hookEventName, "PostCompact");
+  assert.match(compacted.hookSpecificOutput.additionalContext, /Pending approvals:/);
+
   const subagent = await invoke({
     hook_event_name: "SubagentStart",
     session_id: "root-session",
@@ -133,11 +163,12 @@ try {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  assert.equal(events.length, 4);
-  assert.equal(events[3].agentId, "worker-42");
-  assert.equal(events[3].permissionMode, "bypassPermissions");
-  assert.equal(events[0].commandDigest.length, 64);
-  assert.equal("command" in events[0], false);
+  assert.equal(events.length, 7);
+  assert.equal(events[6].agentId, "worker-42");
+  assert.equal(events[6].permissionMode, "bypassPermissions");
+  assert.equal(events[2].commandDigest.length, 64);
+  assert.equal("command" in events[2], false);
+  assert.equal(existsSync(join(dataDir, "consequence-graph.json")), true);
 
   process.stdout.write("Packaged hook smoke test passed\n");
 } finally {

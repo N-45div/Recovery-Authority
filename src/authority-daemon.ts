@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFile, chmod, mkdir, rm } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { dirname, join } from "node:path";
+import { projectConsequenceGraph } from "./consequence-graph.js";
 
 export interface AuthorityDaemonOptions {
   socketPath: string;
@@ -93,6 +94,7 @@ function auditBridge(socket: Socket, dataDir: string): void {
         throw new Error("Invalid sanitized audit event");
       }
       await appendFile(join(dataDir, "hook-events.jsonl"), `${JSON.stringify(event)}\n`, { mode: 0o600 });
+      await projectConsequenceGraph(dataDir);
       socket.end("ok");
     } catch (error) {
       socket.destroy(error as Error);
