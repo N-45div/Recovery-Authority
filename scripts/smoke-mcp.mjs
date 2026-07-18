@@ -73,6 +73,39 @@ async function approve(preparedOutput) {
   return authorization.structuredContent.capability;
 }
 
+async function approveManifest(preparedOutput) {
+  assert.equal(preparedOutput.authorization.status, "pending");
+  assert.match(preparedOutput.authorization.approvalCommand, /approve-manifest/);
+  const result = spawnSync(
+    bun,
+    [
+      join(pluginRoot, "dist", "cli.js"),
+      "approve-manifest",
+      preparedOutput.manifest.id,
+      "--data-dir",
+      dataDir,
+      "--key-dir",
+      keyDir,
+    ],
+    {
+      encoding: "utf8",
+      input: `${preparedOutput.manifest.proofDigest.slice(0, 12)}\n`,
+      env: {
+        ...process.env,
+        PLUGIN_ROOT: pluginRoot,
+        RECOVERY_AUTHORITY_ALLOW_NONINTERACTIVE_APPROVAL: "1",
+      },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const authorization = await client.callTool({
+    name: "recovery_get_manifest_authorization",
+    arguments: { manifestId: preparedOutput.manifest.id },
+  });
+  assert.equal(authorization.structuredContent.status, "approved");
+  return authorization.structuredContent.capability;
+}
+
 runBun(`
   import { Database } from "bun:sqlite";
   const db = new Database(process.env.DATABASE_PATH);
@@ -102,19 +135,24 @@ try {
     [
       "recovery_commit_filesystem_delete",
       "recovery_commit_git_reset_hard",
+      "recovery_commit_manifest",
       "recovery_commit_postgres_mutation",
       "recovery_commit_sqlite_mutation",
       "recovery_get_authorization",
       "recovery_get_consequence_graph",
+      "recovery_get_manifest",
+      "recovery_get_manifest_authorization",
       "recovery_get_operation",
       "recovery_inspect_runtime",
       "recovery_orient",
       "recovery_prepare_filesystem_delete",
       "recovery_prepare_git_reset_hard",
+      "recovery_prepare_manifest",
       "recovery_prepare_postgres_mutation",
       "recovery_prepare_sqlite_mutation",
       "recovery_restore_filesystem_delete",
       "recovery_restore_git_reset_hard",
+      "recovery_restore_manifest",
       "recovery_restore_postgres_mutation",
       "recovery_restore_sqlite_mutation",
     ],
@@ -255,6 +293,64 @@ try {
     arguments: { operationId: gitPrepared.structuredContent.operation.id },
   });
   assert.equal(await readFile(join(workspace, "state.txt"), "utf8"), "git recovery state");
+
+  await writeFile(join(workspace, "manifest-a.txt"), "manifest a");
+  await writeFile(join(workspace, "manifest-b.txt"), "manifest b");
+  const manifestA = await client.callTool({
+    name: "recovery_prepare_filesystem_delete",
+    arguments: {
+      workspaceRoot: workspace,
+      paths: ["manifest-a.txt"],
+      reason: "First manifest child",
+      ttlSeconds: 300,
+    },
+  });
+  const manifestB = await client.callTool({
+    name: "recovery_prepare_filesystem_delete",
+    arguments: {
+      workspaceRoot: workspace,
+      paths: ["manifest-b.txt"],
+      reason: "Second manifest child",
+      ttlSeconds: 300,
+    },
+  });
+  const manifestPrepared = await client.callTool({
+    name: "recovery_prepare_manifest",
+    arguments: {
+      operationIds: [
+        manifestA.structuredContent.operation.id,
+        manifestB.structuredContent.operation.id,
+      ],
+      reason: "Exercise one approval over two independent effects",
+    },
+  });
+  assert.equal(manifestPrepared.structuredContent.semantics.atomicAcrossSystems, false);
+  const manifestCapability = await approveManifest(manifestPrepared.structuredContent);
+  const executions = [
+    { operationId: manifestA.structuredContent.operation.id },
+    { operationId: manifestB.structuredContent.operation.id },
+  ];
+  const manifestCommitted = await client.callTool({
+    name: "recovery_commit_manifest",
+    arguments: {
+      manifestId: manifestPrepared.structuredContent.manifest.id,
+      capability: manifestCapability,
+      operations: executions,
+    },
+  });
+  assert.equal(manifestCommitted.structuredContent.status, "committed");
+  await assert.rejects(readFile(join(workspace, "manifest-a.txt"), "utf8"));
+  await assert.rejects(readFile(join(workspace, "manifest-b.txt"), "utf8"));
+  const manifestRecovered = await client.callTool({
+    name: "recovery_restore_manifest",
+    arguments: {
+      manifestId: manifestPrepared.structuredContent.manifest.id,
+      operations: executions,
+    },
+  });
+  assert.equal(manifestRecovered.structuredContent.status, "recovered");
+  assert.equal(await readFile(join(workspace, "manifest-a.txt"), "utf8"), "manifest a");
+  assert.equal(await readFile(join(workspace, "manifest-b.txt"), "utf8"), "manifest b");
   process.stdout.write("MCP smoke test passed\n");
 } finally {
   await client.close();

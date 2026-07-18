@@ -19,6 +19,12 @@ import {
   RestorePostgresMutationInput,
   RuntimeInspectionInput,
 } from "./contracts.js";
+import {
+  CommitManifestInput,
+  ManifestInput,
+  PrepareManifestInput,
+  RestoreManifestInput,
+} from "./manifest-contracts.js";
 import { orientConsequences, projectConsequenceGraph, sliceConsequenceGraph } from "./consequence-graph.js";
 import { AuthorizationRegistry } from "./authorization.js";
 import { authorityKeyDir, PublicCapabilityVerifier } from "./crypto.js";
@@ -28,7 +34,11 @@ import { PostgresRecoveryService } from "./postgres.js";
 import { SqliteRecoveryService } from "./sqlite.js";
 import { OperationStore } from "./store.js";
 import { inspectRuntimeIdentity } from "./identity.js";
-import { formatApprovalCommand, platformCapabilities } from "./platform.js";
+import { ManifestAuthorizationRegistry } from "./manifest-authorization.js";
+import { ManifestCoordinator } from "./manifest-coordinator.js";
+import { RecoveryManifestService } from "./manifest.js";
+import { ManifestStore } from "./manifest-store.js";
+import { formatApprovalCommand, formatManifestApprovalCommand, platformCapabilities } from "./platform.js";
 import { pathsEqual } from "./path-policy.js";
 
 const dataDir = resolve(process.env.RECOVERY_AUTHORITY_DATA_DIR ?? ".recovery-authority");
@@ -47,6 +57,16 @@ const filesystemService = new FilesystemRecoveryService(dataDir, store, verifier
 const gitService = new GitRecoveryService(dataDir, store, verifier);
 const postgresService = new PostgresRecoveryService(dataDir, store, verifier);
 const sqliteService = new SqliteRecoveryService(dataDir, store, verifier);
+const manifestStore = new ManifestStore(dataDir);
+const manifestApprovals = new ManifestAuthorizationRegistry(dataDir, manifestStore, verifier);
+const manifestService = new RecoveryManifestService(manifestStore, store, approvals);
+const manifestCoordinator = new ManifestCoordinator(
+  manifestStore,
+  store,
+  manifestApprovals,
+  approvals,
+  { filesystem: filesystemService, git: gitService, postgres: postgresService, sqlite: sqliteService },
+);
 
 async function assertAuthorityWorkspace(requestedRoot: string): Promise<void> {
   if (!authorityWorkspaceRoot) return;
@@ -65,11 +85,119 @@ function authorizationView<T extends { operationId: string; status: string }>(au
   };
 }
 
+function manifestAuthorizationView<T extends { manifestId: string; status: string }>(authorization: T): T & { approvalCommand: string | null } {
+  return {
+    ...authorization,
+    approvalCommand: authorization.status === "pending"
+      ? formatManifestApprovalCommand(cliEntry, authorization.manifestId, dataDir, keyDir)
+      : null,
+  };
+}
+
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.10.0" },
+  { name: "recovery-authority", version: "0.11.0" },
   {
     instructions:
       "Call recovery_orient before destructive or delegated work to inspect consequence coverage, uncertainty, and the minimum safe cut. For supported filesystem, SQLite, PostgreSQL, and Git hard-reset effects, prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Raw destructive commands remain blocked even after approval. Hook coverage applies only when the bundled hook is trusted.",
+  },
+);
+
+server.registerTool(
+  "recovery_prepare_manifest",
+  {
+    title: "Compose a recovery manifest",
+    description: "Bind two or more independent pending recovery proofs into one ordered saga and one separately reviewed human approval.",
+    inputSchema: PrepareManifestInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async (input) => {
+    const manifest = await manifestService.prepare(PrepareManifestInput.parse(input));
+    const result = {
+      manifest,
+      authorization: manifestAuthorizationView(await manifestApprovals.request(manifest)),
+      semantics: {
+        atomicAcrossSystems: false,
+        commitOrder: "manifest binding order",
+        recoveryOrder: "reverse binding order",
+        overlappingScopesAllowed: false,
+      },
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_commit_manifest",
+  {
+    title: "Commit an approved recovery manifest",
+    description: "Commit child effects in approved order and automatically compensate recorded commits in reverse order if a later child fails.",
+    inputSchema: CommitManifestInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  async (input) => {
+    const parsed = CommitManifestInput.parse(input);
+    const manifest = await manifestCoordinator.commit(parsed.manifestId, parsed.capability, parsed.operations);
+    return {
+      content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }],
+      structuredContent: manifest,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_restore_manifest",
+  {
+    title: "Restore or resume a recovery manifest",
+    description: "Recover committed children in reverse order, including resuming explicit outstanding work after a partial recovery or interrupted commit.",
+    inputSchema: RestoreManifestInput.shape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  async (input) => {
+    const parsed = RestoreManifestInput.parse(input);
+    const manifest = await manifestCoordinator.recover(parsed.manifestId, parsed.operations);
+    return {
+      content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }],
+      structuredContent: manifest,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_get_manifest_authorization",
+  {
+    title: "Read manifest human authorization",
+    description: "Read aggregate approval status and reveal the proof-bound manifest capability only after separate terminal confirmation.",
+    inputSchema: ManifestInput.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = ManifestInput.parse(input);
+    const authorization = manifestAuthorizationView(await manifestApprovals.get(parsed.manifestId));
+    return {
+      content: [{ type: "text", text: JSON.stringify(authorization, null, 2) }],
+      structuredContent: authorization,
+    };
+  },
+);
+
+server.registerTool(
+  "recovery_get_manifest",
+  {
+    title: "Read recovery manifest",
+    description: "Read ordered child proofs, aggregate status, compensation progress, outstanding recovery work, and failure evidence.",
+    inputSchema: ManifestInput.shape,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (input) => {
+    const parsed = ManifestInput.parse(input);
+    const manifest = await manifestService.get(parsed.manifestId);
+    return {
+      content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }],
+      structuredContent: manifest,
+    };
   },
 );
 
