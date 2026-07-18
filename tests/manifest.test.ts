@@ -5,11 +5,15 @@ import { join } from "node:path";
 import { createAuthorizationRegistry } from "../src/authorization.js";
 import { PublicCapabilityVerifier } from "../src/crypto.js";
 import { createFilesystemRecoveryService } from "../src/filesystem.js";
+import { GitRecoveryService } from "../src/git.js";
 import { RecoveryManifestService } from "../src/manifest.js";
 import { ManifestAuthorizationRegistry } from "../src/manifest-authorization.js";
 import { createManifestApprovalBroker } from "../src/manifest-approval.js";
+import { ManifestCoordinator } from "../src/manifest-coordinator.js";
 import { ManifestStore } from "../src/manifest-store.js";
+import { PostgresRecoveryService } from "../src/postgres.js";
 import { initializeAuthority } from "../src/signer.js";
+import { SqliteRecoveryService } from "../src/sqlite.js";
 import { OperationStore } from "../src/store.js";
 
 const temporaryRoots: string[] = [];
@@ -34,6 +38,52 @@ async function harness() {
     filesystem: await createFilesystemRecoveryService(dataDir),
     manifests: new RecoveryManifestService(new ManifestStore(dataDir), new OperationStore(dataDir), approvals),
   };
+}
+
+async function approvedFilesystemManifest() {
+  const base = await harness();
+  const firstRoot = await temporaryRoot("recovery-manifest-run-first-");
+  const secondRoot = await temporaryRoot("recovery-manifest-run-second-");
+  await writeFile(join(firstRoot, "first.txt"), "first");
+  await writeFile(join(secondRoot, "second.txt"), "second");
+  const first = await base.filesystem.prepare({
+    workspaceRoot: firstRoot,
+    paths: ["first.txt"],
+    reason: "first manifest effect",
+    ttlSeconds: 300,
+  });
+  const second = await base.filesystem.prepare({
+    workspaceRoot: secondRoot,
+    paths: ["second.txt"],
+    reason: "second manifest effect",
+    ttlSeconds: 300,
+  });
+  await base.approvals.request(first.operation);
+  await base.approvals.request(second.operation);
+  const manifest = await base.manifests.prepare({
+    operationIds: [first.operation.id, second.operation.id],
+    reason: "Run two restore-tested effects as one saga",
+  });
+  const verifier = await PublicCapabilityVerifier.load(base.dataDir);
+  const manifestStore = new ManifestStore(base.dataDir);
+  const manifestAuthorizations = new ManifestAuthorizationRegistry(base.dataDir, manifestStore, verifier);
+  await manifestAuthorizations.request(manifest);
+  const approved = await (await createManifestApprovalBroker(base.dataDir))
+    .approve(manifest.id, manifest.proofDigest.slice(0, 12));
+  const operations = new OperationStore(base.dataDir);
+  const coordinator = new ManifestCoordinator(
+    manifestStore,
+    operations,
+    manifestAuthorizations,
+    base.approvals,
+    {
+      filesystem: base.filesystem,
+      git: new GitRecoveryService(base.dataDir, operations, verifier),
+      postgres: new PostgresRecoveryService(base.dataDir, operations, verifier),
+      sqlite: new SqliteRecoveryService(base.dataDir, operations, verifier),
+    },
+  );
+  return { ...base, first, second, firstRoot, secondRoot, manifest, approved, coordinator };
 }
 
 describe("recovery manifests", () => {
@@ -143,5 +193,41 @@ describe("recovery manifests", () => {
       expect(child.manifestId).toBe(manifest.id);
       expect(verifier.verify(child.capability as string).operationId).toBe(operation.id);
     }
+  });
+
+  test("commits in order and recovers in reverse order", async () => {
+    const { first, second, firstRoot, secondRoot, manifest, approved, coordinator } = await approvedFilesystemManifest();
+    const executions = [
+      { operationId: first.operation.id },
+      { operationId: second.operation.id },
+    ];
+    const committed = await coordinator.commit(manifest.id, approved.capability as string, executions);
+    expect(committed.status).toBe("committed");
+    expect(committed.committedOperationIds).toEqual(executions.map((execution) => execution.operationId));
+    expect(await Bun.file(join(firstRoot, "first.txt")).exists()).toBe(false);
+    expect(await Bun.file(join(secondRoot, "second.txt")).exists()).toBe(false);
+
+    const recovered = await coordinator.recover(manifest.id, executions);
+    expect(recovered.status).toBe("recovered");
+    expect(recovered.recoveredOperationIds).toEqual([second.operation.id, first.operation.id]);
+    expect(await Bun.file(join(firstRoot, "first.txt")).text()).toBe("first");
+    expect(await Bun.file(join(secondRoot, "second.txt")).text()).toBe("second");
+  });
+
+  test("compensates prior commits when a later child drifts", async () => {
+    const { first, second, firstRoot, secondRoot, manifest, approved, coordinator } = await approvedFilesystemManifest();
+    await writeFile(join(secondRoot, "second.txt"), "changed after proof");
+    const result = await coordinator.commit(manifest.id, approved.capability as string, [
+      { operationId: first.operation.id },
+      { operationId: second.operation.id },
+    ]);
+
+    expect(result.status).toBe("compensated");
+    expect(result.committedOperationIds).toEqual([first.operation.id]);
+    expect(result.recoveredOperationIds).toEqual([first.operation.id]);
+    expect(result.outstandingOperationIds).toEqual([]);
+    expect(result.failure).toContain("Protected state changed");
+    expect(await Bun.file(join(firstRoot, "first.txt")).text()).toBe("first");
+    expect(await Bun.file(join(secondRoot, "second.txt")).text()).toBe("changed after proof");
   });
 });
