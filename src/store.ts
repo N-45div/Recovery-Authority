@@ -53,4 +53,9 @@ export class OperationStore {
     if (!operation) throw new Error(`Unknown recovery operation: ${id}`);
     return operation;
   }
+
+  async list(): Promise<RecoveryOperationType[]> {
+    await this.writeQueue;
+    return Object.values((await this.read()).operations);
+  }
 }

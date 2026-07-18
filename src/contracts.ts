@@ -13,6 +13,22 @@ export const OperationInput = z.object({
 
 export const RuntimeInspectionInput = z.object({});
 
+export const ConsequenceOrientationInput = z.object({
+  goal: z.string().min(1).max(500).optional(),
+  command: z.string().min(1).max(100_000).optional(),
+  shellDialect: z.enum(["auto", "posix", "powershell"]).default("auto"),
+  sessionId: z.string().min(1).max(500).optional(),
+  operationId: z.string().uuid().optional(),
+  maxNodes: z.number().int().min(10).max(200).default(80),
+});
+
+export const ConsequenceGraphInput = z.object({
+  operationId: z.string().uuid().optional(),
+  sessionId: z.string().min(1).max(500).optional(),
+  category: z.string().min(1).max(100).optional(),
+  maxNodes: z.number().int().min(10).max(200).default(80),
+});
+
 export const CommitFilesystemDeleteInput = OperationInput.extend({
   capability: z.string().min(1),
 });
