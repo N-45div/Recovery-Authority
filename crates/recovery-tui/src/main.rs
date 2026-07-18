@@ -16,14 +16,15 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs, Wrap},
 };
 use recovery_core::{
-    AuthorizationRecord, AuthorizationStatus, ConsequenceGraph, HookEvent, OperationLedger,
-    RecoveryStatus,
+    AuthorizationRecord, AuthorizationStatus, ConsequenceGraph, HookEvent,
+    ManifestAuthorizationRecord, ManifestLedger, ManifestStatus, OperationLedger, RecoveryStatus,
 };
 
-const TAB_NAMES: [&str; 7] = [
+const TAB_NAMES: [&str; 8] = [
     "MISSION",
     "EFFECTS",
     "RECOVERY",
+    "MANIFESTS",
     "AGENTS",
     "GRAPH",
     "AUTHORITY",
@@ -94,7 +95,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => app.next_tab(),
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => app.previous_tab(),
-                KeyCode::Char(value @ '1'..='7') => {
+                KeyCode::Char(value @ '1'..='8') => {
                     app.selected_tab = value.to_digit(10).unwrap_or(1) as usize - 1;
                 }
                 _ => {}
@@ -129,6 +130,28 @@ fn read_authorizations(data_dir: &Path) -> BTreeMap<String, AuthorizationRecord>
                 .filter_map(|entry| fs::read_to_string(entry.path()).ok())
                 .filter_map(|content| serde_json::from_str::<AuthorizationRecord>(&content).ok())
                 .map(|record| (record.operation_id.clone(), record))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_manifests(data_dir: &Path) -> ManifestLedger {
+    fs::read_to_string(data_dir.join("manifests.json"))
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+fn read_manifest_authorizations(data_dir: &Path) -> BTreeMap<String, ManifestAuthorizationRecord> {
+    fs::read_dir(data_dir.join("manifest-approvals"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+                .filter_map(|content| {
+                    serde_json::from_str::<ManifestAuthorizationRecord>(&content).ok()
+                })
+                .map(|record| (record.manifest_id.clone(), record))
                 .collect()
         })
         .unwrap_or_default()
@@ -169,12 +192,16 @@ fn render(frame: &mut Frame, app: &App) {
     let operations = read_operations(&app.data_dir);
     let hook_events = read_hook_events(&app.data_dir);
     let authorizations = read_authorizations(&app.data_dir);
+    let manifests = read_manifests(&app.data_dir);
+    let manifest_authorizations = read_manifest_authorizations(&app.data_dir);
     let graph = read_consequence_graph(&app.data_dir);
     let (title, lines) = tab_content(
         app.selected_tab,
         &operations,
         &hook_events,
         &authorizations,
+        &manifests,
+        &manifest_authorizations,
         &graph,
     );
     frame.render_widget(
@@ -184,7 +211,7 @@ fn render(frame: &mut Frame, app: &App) {
         areas[1],
     );
     frame.render_widget(
-        Line::from("left/right navigate  1-7 jump  q/esc quit"),
+        Line::from("left/right navigate  1-8 jump  q/esc quit"),
         areas[2],
     );
 }
@@ -194,16 +221,25 @@ fn tab_content(
     ledger: &OperationLedger,
     events: &[HookEvent],
     authorizations: &BTreeMap<String, AuthorizationRecord>,
+    manifests: &ManifestLedger,
+    manifest_authorizations: &BTreeMap<String, ManifestAuthorizationRecord>,
     graph: &ConsequenceGraph,
 ) -> (&'static str, Vec<Line<'static>>) {
     match selected_tab {
-        0 => mission_lines(ledger, events, authorizations, graph),
+        0 => mission_lines(ledger, events, authorizations, manifests, graph),
         1 => effect_lines(events),
         2 => recovery_lines(ledger, authorizations),
-        3 => agent_lines(events),
-        4 => graph_lines(graph),
-        5 => authority_lines(),
-        _ => receipt_lines(ledger, events, authorizations),
+        3 => manifest_lines(manifests, manifest_authorizations),
+        4 => agent_lines(events),
+        5 => graph_lines(graph),
+        6 => authority_lines(),
+        _ => receipt_lines(
+            ledger,
+            events,
+            authorizations,
+            manifests,
+            manifest_authorizations,
+        ),
     }
 }
 
@@ -211,6 +247,7 @@ fn mission_lines(
     ledger: &OperationLedger,
     events: &[HookEvent],
     authorizations: &BTreeMap<String, AuthorizationRecord>,
+    manifests: &ManifestLedger,
     graph: &ConsequenceGraph,
 ) -> (&'static str, Vec<Line<'static>>) {
     let blocked = events.iter().filter(|event| event.blocked).count();
@@ -233,6 +270,19 @@ fn mission_lines(
         .filter(|authorization| authorization.status == AuthorizationStatus::Approved)
         .count();
     let active_agents = active_agent_count(events);
+    let manifest_attention = manifests
+        .manifests
+        .values()
+        .filter(|manifest| {
+            matches!(
+                manifest.status,
+                ManifestStatus::Committing
+                    | ManifestStatus::Recovering
+                    | ManifestStatus::PartiallyRecovered
+                    | ManifestStatus::Failed
+            )
+        })
+        .count();
     (
         " Mission status ",
         vec![
@@ -267,6 +317,14 @@ fn mission_lines(
             Line::from(vec![
                 Span::styled("AGENTS    ", Style::default().fg(Color::Magenta)),
                 Span::raw(active_agents.to_string()),
+            ]),
+            Line::from(vec![
+                Span::styled("SAGAS     ", Style::default().fg(Color::Blue)),
+                Span::raw(format!(
+                    "{} total / {} need attention",
+                    manifests.manifests.len(),
+                    manifest_attention
+                )),
             ]),
             Line::from(""),
             Line::from("Destructive effects require a restore proof and separate human approval."),
@@ -389,6 +447,54 @@ fn recovery_lines(
     (" Recovery operations ", lines)
 }
 
+fn manifest_lines(
+    ledger: &ManifestLedger,
+    authorizations: &BTreeMap<String, ManifestAuthorizationRecord>,
+) -> (&'static str, Vec<Line<'static>>) {
+    let mut manifests = ledger.manifests.values().collect::<Vec<_>>();
+    manifests.sort_by_key(|manifest| std::cmp::Reverse(manifest.created_at));
+    let mut lines = Vec::new();
+    for manifest in manifests.into_iter().take(8) {
+        let authorization = authorizations
+            .get(&manifest.id)
+            .map(|record| format!("{:?}", record.status).to_uppercase())
+            .unwrap_or_else(|| "UNTRACKED".to_string());
+        lines.push(Line::from(format!(
+            "{:?}  {}  {}  {} effects",
+            manifest.status,
+            authorization,
+            &manifest.id[..8],
+            manifest.bindings.len()
+        )));
+        lines.push(Line::from(format!(
+            "  committed {}  recovered {}  outstanding {}",
+            manifest.committed_operation_ids.len(),
+            manifest.recovered_operation_ids.len(),
+            manifest.outstanding_operation_ids.len()
+        )));
+        for (index, binding) in manifest.bindings.iter().take(4).enumerate() {
+            lines.push(Line::from(format!(
+                "  {}. {}  {}",
+                index + 1,
+                binding.kind,
+                binding.scope.join(", ")
+            )));
+        }
+        if let Some(failure) = &manifest.failure {
+            lines.push(Line::from(vec![
+                Span::styled("  FAILURE  ", Style::default().fg(Color::Red)),
+                Span::raw(failure.clone()),
+            ]));
+        }
+        lines.push(Line::from(format!("  {}", manifest.reason)));
+        lines.push(Line::from(""));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from("No multi-effect recovery manifests yet."));
+    }
+    (" Recovery manifests ", lines)
+}
+
 fn graph_lines(graph: &ConsequenceGraph) -> (&'static str, Vec<Line<'static>>) {
     if graph.schema_version == 0 {
         return (
@@ -454,6 +560,7 @@ fn authority_lines() -> (&'static str, Vec<Line<'static>>) {
             Line::from("EXACT RECOVERY   postgres.schema-mutate"),
             Line::from("EXACT RECOVERY   git.reset-hard"),
             Line::from("HUMAN GATE       proof-bound approval"),
+            Line::from("SAGA GATE        one aggregate proof, ordered commit, reverse recovery"),
             Line::from("BLOCK ONLY       authorization.approval"),
             Line::from("BLOCK ONLY       identity.root-override"),
             Line::from("BLOCK ONLY       agent.delegate"),
@@ -477,6 +584,8 @@ fn receipt_lines(
     ledger: &OperationLedger,
     events: &[HookEvent],
     authorizations: &BTreeMap<String, AuthorizationRecord>,
+    manifests: &ManifestLedger,
+    manifest_authorizations: &BTreeMap<String, ManifestAuthorizationRecord>,
 ) -> (&'static str, Vec<Line<'static>>) {
     let mut lines = Vec::new();
     for operation in ledger.operations.values().rev().take(8) {
@@ -491,6 +600,22 @@ fn receipt_lines(
             lines.push(Line::from(format!(
                 "APPROVAL {}  {}",
                 &authorization.operation_id[..8],
+                digest
+            )));
+        }
+    }
+    for manifest in manifests.manifests.values().rev().take(6) {
+        lines.push(Line::from(format!(
+            "MANIFEST {}  {}",
+            &manifest.id[..8],
+            manifest.proof_digest
+        )));
+    }
+    for authorization in manifest_authorizations.values().rev().take(6) {
+        if let Some(digest) = &authorization.approval_digest {
+            lines.push(Line::from(format!(
+                "SAGA APPROVAL {}  {}",
+                &authorization.manifest_id[..8],
                 digest
             )));
         }
