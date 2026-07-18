@@ -86,6 +86,18 @@ export function formatApprovalCommand(
   return `bun ${values.map(quotePosix).join(" ")}`;
 }
 
+export function formatManifestApprovalCommand(
+  cliEntry: string,
+  manifestId: string,
+  dataDir: string,
+  keyDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const values = [cliEntry, "approve-manifest", manifestId, "--data-dir", dataDir, "--key-dir", keyDir];
+  if (platform === "win32") return `& bun ${values.map(quotePowerShell).join(" ")}`;
+  return `bun ${values.map(quotePosix).join(" ")}`;
+}
+
 export function ipcEndpoint(name: string, platform: NodeJS.Platform = process.platform): string {
   const safeName = name.replaceAll(/[^A-Za-z0-9_.-]/g, "-").slice(0, 72);
   const digest = createHash("sha256").update(name).digest("hex").slice(0, 12);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatApprovalCommand, ipcEndpoint, platformCapabilities } from "../src/platform.js";
+import { formatApprovalCommand, formatManifestApprovalCommand, ipcEndpoint, platformCapabilities } from "../src/platform.js";
 
 describe("platform adapters", () => {
   test("reports native containment and transport boundaries honestly", () => {
@@ -34,6 +34,9 @@ describe("platform adapters", () => {
     );
     expect(windows).toContain("& bun 'C:\\Program Files\\Recovery Authority\\dist\\cli.js' 'approve' 'op''2'");
     expect(windows).not.toContain(".sh");
+
+    const manifest = formatManifestApprovalCommand("/opt/plugin/dist/cli.js", "manifest-1", "/tmp/data", "/tmp/keys", "linux");
+    expect(manifest).toContain("bun '/opt/plugin/dist/cli.js' 'approve-manifest' 'manifest-1'");
   });
 
   test("uses named pipes on Windows and Unix sockets elsewhere", () => {

@@ -33,7 +33,7 @@ async function main(): Promise<void> {
     await (await import("./pre-tool-hook.js")).runHook();
     return;
   }
-  if (command === "approve" || command === "init") {
+  if (command === "approve" || command === "approve-manifest" || command === "init") {
     await (await import("./approve.js")).runApprovalCommand([command, ...args]);
     return;
   }
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify(evaluateConsequenceCorpus(graph), null, 2)}\n`);
     return;
   }
-  throw new Error("Usage: recovery-authority <hook|mcp|approve|init|doctor|evaluate> [arguments]");
+  throw new Error("Usage: recovery-authority <hook|mcp|approve|approve-manifest|init|doctor|evaluate> [arguments]");
 }
 
 if (import.meta.main) await main();

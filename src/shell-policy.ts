@@ -139,7 +139,8 @@ export function classifyCommandWords(input: string[], assignments: string[] = []
     executable === "recovery-authority-approve" ||
     (["bash", "sh", "zsh", "dash", "bun", "node"].includes(executable) &&
       (args.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg)) ||
-        (args.some((arg) => /(?:^|\/)(?:cli\.js|cli\.ts)$/.test(arg)) && args.includes("approve"))))
+        (args.some((arg) => /(?:^|\/)(?:cli\.js|cli\.ts)$/.test(arg)) &&
+          (args.includes("approve") || args.includes("approve-manifest")))))
   ) {
     return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
   }
