@@ -216,6 +216,7 @@ server.registerTool(
       ...(parsed.goal ? { goal: parsed.goal } : {}),
       ...(parsed.command ? { command: parsed.command } : {}),
       ...(parsed.operationId ? { operationId: parsed.operationId } : {}),
+      ...(parsed.manifestId ? { manifestId: parsed.manifestId } : {}),
       shellDialect: parsed.shellDialect,
     });
     const result = {
@@ -223,6 +224,7 @@ server.registerTool(
       graph: sliceConsequenceGraph(graph, {
         ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
         ...(parsed.operationId ? { operationId: parsed.operationId } : {}),
+        ...(parsed.manifestId ? { manifestId: parsed.manifestId } : {}),
         maxNodes: parsed.maxNodes,
       }),
     };
@@ -246,6 +248,7 @@ server.registerTool(
     const graph = await projectConsequenceGraph(dataDir);
     const result = sliceConsequenceGraph(graph, {
       ...(parsed.operationId ? { operationId: parsed.operationId } : {}),
+      ...(parsed.manifestId ? { manifestId: parsed.manifestId } : {}),
       ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
       ...(parsed.category ? { category: parsed.category } : {}),
       maxNodes: parsed.maxNodes,

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { orientConsequences, projectConsequenceGraph, sliceConsequenceGraph } from "../src/consequence-graph.js";
+import { ManifestStore } from "../src/manifest-store.js";
 import { OperationStore } from "../src/store.js";
 
 const temporaryRoots: string[] = [];
@@ -135,6 +136,105 @@ describe("living consequence graph", () => {
 
     expect(orientation.safeCut[0]).toMatchObject({ category: "multi-effect", requirement: "split_manifest" });
     expect(orientation.findings.map((finding) => finding.category)).toEqual(["filesystem.delete", "sqlite.mutate"]);
+  });
+
+  test("recognizes exact multi-effect proofs bound by an approved manifest", async () => {
+    const dataDir = await temporaryDataDir();
+    const filesystemId = await seedFilesystemProof(dataDir, "approved");
+    const sqliteId = "22222222-2222-4222-8222-222222222222";
+    const manifestId = "33333333-3333-4333-8333-333333333333";
+    const expiresAt = new Date(Date.now() + 300_000).toISOString();
+    await new OperationStore(dataDir).put({
+      id: sqliteId,
+      kind: "sqlite.mutate",
+      status: "proven",
+      workspaceRoot: "/workspace",
+      paths: ["app.db"],
+      reason: "test SQLite consequence",
+      artifactDir: join(dataDir, "artifacts", sqliteId),
+      databasePath: "app.db",
+      stateWitness: "sqlite-state-witness",
+      statementDigest: "statement-digest",
+      proofDigest: "sqlite-proof-digest",
+      integrityCheck: "ok",
+      postCommitWitness: null,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+      committedAt: null,
+      recoveredAt: null,
+      failure: null,
+    });
+    await writeFile(join(dataDir, "approvals", `${sqliteId}.json`), JSON.stringify({
+      operationId: sqliteId,
+      status: "approved",
+      proofDigest: "sqlite-proof-digest",
+      requestedAt: new Date().toISOString(),
+      approvedAt: new Date().toISOString(),
+      expiresAt,
+      approvalDigest: "sqlite-approval-digest",
+      capability: "redacted-from-graph",
+      source: "manifest",
+      manifestId,
+      manifestProofDigest: "manifest-proof-digest",
+    }));
+    await new ManifestStore(dataDir).put({
+      id: manifestId,
+      status: "prepared",
+      reason: "test aggregate consequence",
+      bindings: [
+        { operationId: filesystemId, kind: "filesystem.delete", proofDigest: "proof-digest", stateWitness: "state-witness", statementDigest: null, scope: ["filesystem:/workspace/cache"] },
+        { operationId: sqliteId, kind: "sqlite.mutate", proofDigest: "sqlite-proof-digest", stateWitness: "sqlite-state-witness", statementDigest: "statement-digest", scope: ["filesystem:/workspace/app.db"] },
+      ],
+      proofDigest: "manifest-proof-digest",
+      stateWitness: "manifest-state-witness",
+      bindingDigest: "binding-digest",
+      createdAt: new Date().toISOString(),
+      expiresAt,
+      committedOperationIds: [],
+      recoveredOperationIds: [],
+      outstandingOperationIds: [],
+      committedAt: null,
+      recoveredAt: null,
+      failure: null,
+    });
+    await mkdir(join(dataDir, "manifest-approvals"), { recursive: true });
+    await writeFile(join(dataDir, "manifest-approvals", `${manifestId}.json`), JSON.stringify({
+      manifestId,
+      status: "approved",
+      proofDigest: "manifest-proof-digest",
+      requestedAt: new Date().toISOString(),
+      approvedAt: new Date().toISOString(),
+      expiresAt,
+      approvalDigest: "manifest-approval-digest",
+      capability: "redacted-from-graph",
+    }));
+    await writeFile(join(dataDir, "approvals", `${filesystemId}.json`), JSON.stringify({
+      operationId: filesystemId,
+      status: "approved",
+      proofDigest: "proof-digest",
+      requestedAt: new Date().toISOString(),
+      approvedAt: new Date().toISOString(),
+      expiresAt,
+      approvalDigest: "filesystem-manifest-approval-digest",
+      capability: "redacted-from-graph",
+      source: "manifest",
+      manifestId,
+      manifestProofDigest: "manifest-proof-digest",
+    }));
+
+    const graph = await projectConsequenceGraph(dataDir);
+    const orientation = orientConsequences(graph, {
+      command: "rm -rf cache && sqlite3 app.db 'DELETE FROM users'",
+      manifestId,
+      shellDialect: "posix",
+    });
+    expect(orientation.safeCut[0]).toMatchObject({ requirement: "split_manifest", satisfied: true });
+    expect(orientation.safeCut.filter((item) => item.requirement === "exact_commit_tool")).toHaveLength(2);
+    expect(graph.nodes.some((node) => node.kind === "manifest" && node.attributes.manifestId === manifestId)).toBe(true);
+    expect(graph.edges.filter((edge) => edge.relation === "contains")).toHaveLength(2);
+    const slice = sliceConsequenceGraph(graph, { manifestId, maxNodes: 30 });
+    expect(slice.nodes.some((node) => node.kind === "resource")).toBe(true);
+    expect(slice.nodes.some((node) => node.kind === "proof" && node.attributes.digest === "sqlite-proof-digest")).toBe(true);
   });
 
   test("returns a bounded operation neighborhood", async () => {

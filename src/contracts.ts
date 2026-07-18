@@ -19,11 +19,13 @@ export const ConsequenceOrientationInput = z.object({
   shellDialect: z.enum(["auto", "posix", "powershell"]).default("auto"),
   sessionId: z.string().min(1).max(500).optional(),
   operationId: z.string().uuid().optional(),
+  manifestId: z.string().uuid().optional(),
   maxNodes: z.number().int().min(10).max(200).default(80),
 });
 
 export const ConsequenceGraphInput = z.object({
   operationId: z.string().uuid().optional(),
+  manifestId: z.string().uuid().optional(),
   sessionId: z.string().min(1).max(500).optional(),
   category: z.string().min(1).max(100).optional(),
   maxNodes: z.number().int().min(10).max(200).default(80),

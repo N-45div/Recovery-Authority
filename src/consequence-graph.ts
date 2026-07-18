@@ -6,12 +6,13 @@ import { analyzePowerShellCommand } from "./powershell-policy.js";
 import { platformCapabilities } from "./platform.js";
 import { analyzeShellCommand, type RiskCategory, type RiskFinding } from "./shell-policy.js";
 import { OperationStore } from "./store.js";
+import { ManifestStore } from "./manifest-store.js";
 
 const Scalar = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 export const ConsequenceNode = z.object({
   id: z.string(),
-  kind: z.enum(["session", "agent", "operation", "effect", "resource", "proof", "authorization", "receipt"]),
+  kind: z.enum(["session", "agent", "manifest", "operation", "effect", "resource", "proof", "authorization", "receipt"]),
   label: z.string(),
   state: z.string(),
   attributes: z.record(Scalar),
@@ -81,9 +82,23 @@ const AuthorizationRecord = z.object({
   approvedAt: z.string().nullable(),
   expiresAt: z.string(),
   approvalDigest: z.string().nullable(),
+  source: z.enum(["individual", "manifest"]).default("individual"),
+  manifestId: z.string().uuid().nullable().default(null),
 });
 
 type AuthorizationRecord = z.infer<typeof AuthorizationRecord>;
+
+const ManifestAuthorizationRecord = z.object({
+  manifestId: z.string().uuid(),
+  status: z.enum(["pending", "approved", "expired"]),
+  proofDigest: z.string(),
+  requestedAt: z.string(),
+  approvedAt: z.string().nullable(),
+  expiresAt: z.string(),
+  approvalDigest: z.string().nullable(),
+});
+
+type ManifestAuthorizationRecord = z.infer<typeof ManifestAuthorizationRecord>;
 
 const OPERATION_CATEGORY: Record<string, RiskCategory> = {
   "filesystem.delete": "filesystem.delete",
@@ -146,6 +161,18 @@ async function readAuthorizations(dataDir: string): Promise<AuthorizationRecord[
   }
 }
 
+async function readManifestAuthorizations(dataDir: string): Promise<ManifestAuthorizationRecord[]> {
+  try {
+    const files = await readdir(join(dataDir, "manifest-approvals"));
+    return await Promise.all(files.filter((file) => file.endsWith(".json")).map(async (file) =>
+      ManifestAuthorizationRecord.parse(JSON.parse(await readFile(join(dataDir, "manifest-approvals", file), "utf8"))),
+    ));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 function resourceLabel(operation: Awaited<ReturnType<OperationStore["list"]>>[number], path: string): string {
   if (operation.kind === "postgres.schema-mutate") return `${operation.connectionFingerprint}:${path}`;
   if (operation.kind === "git.reset-hard") return `${operation.repositoryRoot}:${path}`;
@@ -180,13 +207,16 @@ function posture(hookObserved: boolean): z.infer<typeof RecoveryPosture> {
 }
 
 export async function projectConsequenceGraph(dataDir: string): Promise<ConsequenceGraph> {
-  const [operations, authorizations, events] = await Promise.all([
+  const [operations, authorizations, manifests, manifestAuthorizations, events] = await Promise.all([
     new OperationStore(dataDir).list(),
     readAuthorizations(dataDir),
+    new ManifestStore(dataDir).list(),
+    readManifestAuthorizations(dataDir),
     readHookEvents(dataDir),
   ]);
   const builder = new GraphBuilder();
   const authorizationByOperation = new Map(authorizations.map((record) => [record.operationId, record]));
+  const authorizationByManifest = new Map(manifestAuthorizations.map((record) => [record.manifestId, record]));
 
   for (const operation of operations) {
     const operationId = `operation:${operation.id}`;
@@ -206,7 +236,18 @@ export async function projectConsequenceGraph(dataDir: string): Promise<Conseque
     const authorization = authorizationByOperation.get(operation.id);
     if (authorization) {
       const authorizationId = `authorization:${operation.id}`;
-      builder.node({ id: authorizationId, kind: "authorization", label: authorization.status, state: authorization.status, attributes: { operationId: operation.id, expiresAt: authorization.expiresAt } });
+      builder.node({
+        id: authorizationId,
+        kind: "authorization",
+        label: authorization.status,
+        state: authorization.status,
+        attributes: {
+          operationId: operation.id,
+          expiresAt: authorization.expiresAt,
+          source: authorization.source,
+          manifestId: authorization.manifestId,
+        },
+      });
       builder.edge(operationId, authorizationId, "requests", authorization.status);
       if (authorization.status === "approved") builder.edge(authorizationId, operationId, "authorizes", "approved");
     }
@@ -214,6 +255,64 @@ export async function projectConsequenceGraph(dataDir: string): Promise<Conseque
       const receiptId = `receipt:${operation.id}:${operation.status}`;
       builder.node({ id: receiptId, kind: "receipt", label: operation.status, state: operation.status, attributes: { committedAt: operation.committedAt, recoveredAt: operation.recoveredAt } });
       builder.edge(operationId, receiptId, "produces", operation.status);
+    }
+  }
+
+  for (const manifest of manifests) {
+    const manifestId = `manifest:${manifest.id}`;
+    const proofId = `proof:${manifest.proofDigest}`;
+    builder.node({
+      id: manifestId,
+      kind: "manifest",
+      label: "recovery.manifest",
+      state: manifest.status,
+      attributes: {
+        manifestId: manifest.id,
+        expiresAt: manifest.expiresAt,
+        childCount: manifest.bindings.length,
+        outstandingCount: manifest.outstandingOperationIds.length,
+        bindingDigest: manifest.bindingDigest,
+      },
+    });
+    builder.node({
+      id: proofId,
+      kind: "proof",
+      label: manifest.proofDigest.slice(0, 12),
+      state: manifest.status === "failed" ? "failed" : "verified",
+      attributes: { digest: manifest.proofDigest, expiresAt: manifest.expiresAt },
+    });
+    builder.edge(manifestId, proofId, "protected_by", "aggregate-proof");
+    for (const binding of manifest.bindings) {
+      builder.edge(manifestId, `operation:${binding.operationId}`, "contains", manifest.status);
+    }
+    const authorization = authorizationByManifest.get(manifest.id);
+    if (authorization) {
+      const authorizationId = `manifest-authorization:${manifest.id}`;
+      builder.node({
+        id: authorizationId,
+        kind: "authorization",
+        label: authorization.status,
+        state: authorization.status,
+        attributes: { manifestId: manifest.id, expiresAt: authorization.expiresAt },
+      });
+      builder.edge(manifestId, authorizationId, "requests", authorization.status);
+      if (authorization.status === "approved") builder.edge(authorizationId, manifestId, "authorizes", "approved");
+    }
+    if (manifest.committedAt || manifest.recoveredAt || manifest.failure) {
+      const receiptId = `manifest-receipt:${manifest.id}:${manifest.status}`;
+      builder.node({
+        id: receiptId,
+        kind: "receipt",
+        label: manifest.status,
+        state: manifest.status,
+        attributes: {
+          manifestId: manifest.id,
+          committedAt: manifest.committedAt,
+          recoveredAt: manifest.recoveredAt,
+          outstandingCount: manifest.outstandingOperationIds.length,
+        },
+      });
+      builder.edge(manifestId, receiptId, "produces", manifest.status);
     }
   }
 
@@ -286,7 +385,7 @@ export interface ConsequenceOrientation {
 
 export function orientConsequences(
   graph: ConsequenceGraph,
-  options: { goal?: string; command?: string; operationId?: string; shellDialect?: "auto" | "posix" | "powershell" },
+  options: { goal?: string; command?: string; operationId?: string; manifestId?: string; shellDialect?: "auto" | "posix" | "powershell" },
 ): ConsequenceOrientation {
   const dialect = options.shellDialect === "auto" || !options.shellDialect
     ? platformCapabilities().shellDialect
@@ -297,9 +396,44 @@ export function orientConsequences(
   const categories = [...new Set(findings.map((finding) => finding.category))];
   const operations = graph.nodes.filter((node) => node.kind === "operation");
   const approvals = graph.nodes.filter((node) => node.kind === "authorization");
+  const selectedManifest = options.manifestId
+    ? graph.nodes.find((node) => node.kind === "manifest" && node.attributes.manifestId === options.manifestId)
+    : undefined;
+  const manifestOperationIds = new Set(selectedManifest
+    ? graph.edges
+      .filter((edge) => edge.from === selectedManifest.id && edge.relation === "contains")
+      .map((edge) => graph.nodes.find((node) => node.id === edge.to)?.attributes.operationId)
+      .filter((id): id is string => typeof id === "string")
+    : []);
+  const aggregateApproved = options.manifestId !== undefined && approvals.some((authorization) =>
+    authorization.attributes.manifestId === options.manifestId &&
+    authorization.attributes.operationId === undefined &&
+    authorization.state === "approved",
+  );
+  const operationApproved = (operation: ConsequenceNode): boolean => approvals.some((authorization) =>
+    authorization.attributes.operationId === operation.attributes.operationId &&
+    authorization.state === "approved" &&
+    (options.manifestId === undefined || (
+      aggregateApproved &&
+      authorization.attributes.source === "manifest" &&
+      authorization.attributes.manifestId === options.manifestId
+    )),
+  );
   const safeCut: SafeCutItem[] = [];
   if (categories.length > 1) {
-    safeCut.push({ category: "multi-effect", requirement: "split_manifest", satisfied: false, detail: "No combined recovery manifest exists; split the effects into exact adapter operations." });
+    const requiredKinds = new Set(categories.map((category) =>
+      Object.entries(OPERATION_CATEGORY).find(([, value]) => value === category)?.[0],
+    ).filter((kind): kind is string => Boolean(kind)));
+    const manifestKinds = new Set(operations
+      .filter((operation) => manifestOperationIds.has(operation.attributes.operationId as string))
+      .map((operation) => operation.label));
+    const exactManifest = selectedManifest !== undefined &&
+      selectedManifest.state === "prepared" &&
+      requiredKinds.size === manifestKinds.size &&
+      [...requiredKinds].every((kind) => manifestKinds.has(kind));
+    safeCut.push(exactManifest
+      ? { category: "multi-effect", requirement: "split_manifest", satisfied: true, detail: "The exact effects are bound into one ordered recovery manifest." }
+      : { category: "multi-effect", requirement: "split_manifest", satisfied: false, detail: "Prepare exact adapter proofs, then bind the independent effects into one recovery manifest." });
   }
   for (const category of categories) {
     const finding = findings.find((item) => item.category === category);
@@ -311,16 +445,14 @@ export function orientConsequences(
     const candidates = operations.filter((node) =>
       node.label === operationKind &&
       freshness(node) &&
-      options.operationId !== undefined &&
-      node.attributes.operationId === options.operationId,
+      ((options.operationId !== undefined && node.attributes.operationId === options.operationId) ||
+        (options.manifestId !== undefined && manifestOperationIds.has(node.attributes.operationId as string))),
     );
     if (candidates.length === 0) {
       safeCut.push({ category, requirement: "prepare_proof", satisfied: false, detail: "Prepare and restore-test an exact recovery operation." });
       continue;
     }
-    const approved = candidates.some((operation) => approvals.some((authorization) =>
-      authorization.attributes.operationId === operation.attributes.operationId && authorization.state === "approved",
-    ));
+    const approved = candidates.some(operationApproved);
     safeCut.push(approved
       ? { category, requirement: "exact_commit_tool", satisfied: true, detail: "Use the capability only through the operation's exact MCP commit tool; the raw command remains blocked." }
       : { category, requirement: "human_approval", satisfied: false, detail: "A fresh restore proof exists but still requires separate human approval." });
@@ -329,17 +461,15 @@ export function orientConsequences(
   const proofCovered = categories.filter((category) => operations.some((node) =>
     node.label === category &&
     freshness(node) &&
-    options.operationId !== undefined &&
-    node.attributes.operationId === options.operationId,
+    ((options.operationId !== undefined && node.attributes.operationId === options.operationId) ||
+      (options.manifestId !== undefined && manifestOperationIds.has(node.attributes.operationId as string))),
   )).length;
   const approvedCovered = categories.filter((category) => operations.some((operation) =>
     operation.label === category &&
     freshness(operation) &&
-    options.operationId !== undefined &&
-    operation.attributes.operationId === options.operationId &&
-    approvals.some((authorization) =>
-      authorization.attributes.operationId === operation.attributes.operationId && authorization.state === "approved",
-    ),
+    ((options.operationId !== undefined && operation.attributes.operationId === options.operationId) ||
+      (options.manifestId !== undefined && manifestOperationIds.has(operation.attributes.operationId as string))) &&
+    operationApproved(operation),
   )).length;
   const uncertain = findings.filter((finding) => finding.category === "opaque.execution" || !finding.adapterAvailable).length;
   return {
@@ -363,21 +493,27 @@ export function orientConsequences(
 
 export function sliceConsequenceGraph(
   graph: ConsequenceGraph,
-  filter: { operationId?: string; sessionId?: string; category?: string; maxNodes: number },
+  filter: { operationId?: string; manifestId?: string; sessionId?: string; category?: string; maxNodes: number },
 ): ConsequenceGraph {
   const seeds = new Set(graph.nodes.filter((node) =>
     (!filter.operationId || node.attributes.operationId === filter.operationId) &&
+    (!filter.manifestId || node.attributes.manifestId === filter.manifestId) &&
     (!filter.category || node.label === filter.category || node.attributes.category === filter.category) &&
     (!filter.sessionId || node.attributes.sessionDigest === sha256(filter.sessionId)),
   ).map((node) => node.id));
-  if (seeds.size === 0 && !filter.operationId && !filter.sessionId && !filter.category) {
+  if (seeds.size === 0 && !filter.operationId && !filter.manifestId && !filter.sessionId && !filter.category) {
     graph.nodes.slice(0, filter.maxNodes).forEach((node) => seeds.add(node.id));
   }
-  for (const edge of graph.edges) {
-    if (seeds.has(edge.from)) seeds.add(edge.to);
-    if (seeds.has(edge.to)) seeds.add(edge.from);
-    if (seeds.size >= filter.maxNodes) break;
+  const selected = new Set<string>();
+  const queue = [...seeds];
+  while (queue.length > 0 && selected.size < filter.maxNodes) {
+    const current = queue.shift()!;
+    if (selected.has(current)) continue;
+    selected.add(current);
+    for (const edge of graph.edges) {
+      if (edge.from === current && !selected.has(edge.to)) queue.push(edge.to);
+      if (edge.to === current && !selected.has(edge.from)) queue.push(edge.from);
+    }
   }
-  const selected = new Set([...seeds].slice(0, filter.maxNodes));
   return { ...graph, nodes: graph.nodes.filter((node) => selected.has(node.id)), edges: graph.edges.filter((edge) => selected.has(edge.from) && selected.has(edge.to)) };
 }
