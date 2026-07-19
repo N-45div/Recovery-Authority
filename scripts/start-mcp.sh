@@ -20,8 +20,8 @@ if [[ -n "${RECOVERY_AUTHORITY_MCP_SOCKET:-}" ]]; then
   exec "$bun_bin" "$root/src/mcp-proxy.ts"
 fi
 
-if [[ -f "$root/dist/cli.js" ]]; then
-  exec "$bun_bin" "$root/dist/cli.js" mcp
+if [[ -f "$root/dist/mcp.js" ]]; then
+  exec "$bun_bin" "$root/dist/mcp.js"
 fi
 
-exec "$bun_bin" "$root/src/cli.ts" mcp
+exec "$bun_bin" "$root/src/mcp.ts"

@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Inspecting recovery posture"
           }
@@ -20,8 +20,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Registering delegated agent authority"
           }
@@ -34,8 +34,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Closing delegated agent receipt"
           }
@@ -48,8 +48,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Checking recovery authority"
           }
@@ -62,8 +62,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Checking recovery before elevation"
           }
@@ -76,8 +76,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Recording consequence receipt"
           }
@@ -90,8 +90,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Persisting recovery graph"
           }
@@ -104,8 +104,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/cli.js\" hook",
-            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\cli.js\" hook } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\cli.js\" hook } else { exit 0 }",
+            "command": "root=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; if [ -z \"$root\" ]; then exit 0; fi; exec bun \"$root/dist/hook.js\"",
+            "commandWindows": "if ($env:PLUGIN_ROOT) { & bun \"$env:PLUGIN_ROOT\\dist\\hook.js\" } elseif ($env:CLAUDE_PLUGIN_ROOT) { & bun \"$env:CLAUDE_PLUGIN_ROOT\\dist\\hook.js\" } else { exit 0 }",
             "timeout": 10,
             "statusMessage": "Restoring recovery context"
           }

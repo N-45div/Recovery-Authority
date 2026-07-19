@@ -51,7 +51,7 @@ The MCP socket does not add a second authorization protocol. It transports the e
 
 ## Platform architecture
 
-The portable control plane is `dist/cli.js`, the MCP schema, proof and capability contracts, approval ledger, recovery adapters, and TUI. Platform adapters select:
+The portable control plane is split by authority: `dist/mcp.js` is verifier-only, `dist/hook.js` classifies effects, and `dist/authority.js` is the separate human-terminal signer. The MCP schema, proof and capability contracts, approval ledger, recovery adapters, and TUI are shared across platforms. Platform adapters select:
 
 | Concern | Linux | macOS | Windows 11 |
 | --- | --- | --- | --- |

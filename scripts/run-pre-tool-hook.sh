@@ -16,8 +16,8 @@ else
   exit 1
 fi
 
-if [[ -f "$root/dist/cli.js" ]]; then
-  exec "$bun_bin" "$root/dist/cli.js" hook
+if [[ -f "$root/dist/hook.js" ]]; then
+  exec "$bun_bin" "$root/dist/hook.js"
 fi
 
-exec "$bun_bin" "$root/src/cli.ts" hook
+exec "$bun_bin" "$root/src/hook.ts"

@@ -80,7 +80,7 @@ async function main(): Promise<void> {
 
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [join(pluginRoot, "dist", "cli.js"), "mcp"],
+    args: [join(pluginRoot, "dist", "mcp.js")],
     env: {
       PATH: process.env.PATH ?? "",
       PLUGIN_ROOT: pluginRoot,

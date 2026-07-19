@@ -8,7 +8,7 @@ if (!pluginRoot) throw new Error("PLUGIN_ROOT is required");
 
 const transport = new StdioClientTransport({
   command: "bun",
-  args: [join(pluginRoot, "dist", "cli.js"), "mcp"],
+  args: [join(pluginRoot, "dist", "mcp.js")],
   env: {
     PATH: process.env.PATH ?? "",
     PLUGIN_ROOT: pluginRoot,

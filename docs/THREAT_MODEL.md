@@ -91,3 +91,5 @@ The root filesystem is mounted read-only and the selected repository is rebound 
 - The filesystem adapter witnesses contents, modes, and symlink targets. It does not yet preserve every ACL, extended attribute, sparse-file layout, hard-link relationship, or open-file semantic.
 - Local filesystem commit uses path revalidation followed by deletion, not descriptor-relative `openat2`/`unlinkat`; hostile concurrent path replacement remains outside this release's guarantee.
 - Remote infrastructure and object-storage effects are block-only because compensation is not exact recovery.
+- Remote billing and SaaS mutations, including Stripe cancellation paths, are block-only. A local snapshot cannot prove restoration of externally consumed events, refunds, webhooks, or third-party state.
+- Operation ledgers use cross-process locked read-modify-write transactions and durable atomic publication. Each adapter records `committing` before live mutation and reconciles an interrupted operation only when the live witness equals either the original or exact drilled post-state.

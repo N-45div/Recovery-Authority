@@ -2,7 +2,7 @@
   "mcpServers": {
     "recovery-authority": {
       "command": "bun",
-      "args": ["${PLUGIN_ROOT}/dist/cli.js", "mcp"],
+      "args": ["${PLUGIN_ROOT}/dist/mcp.js"],
       "env_vars": [
         "RECOVERY_AUTHORITY_MCP_SOCKET",
         "RECOVERY_AUTHORITY_AUDIT_SOCKET",

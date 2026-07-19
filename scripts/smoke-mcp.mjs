@@ -40,12 +40,12 @@ function runGit(args) {
 async function approve(preparedOutput) {
   assert.equal(preparedOutput.authorization.status, "pending");
   assert.equal(preparedOutput.authorization.capability, null);
-  assert.match(preparedOutput.authorization.approvalCommand, /dist\/cli\.js/);
+  assert.match(preparedOutput.authorization.approvalCommand, /dist\/authority\.js/);
   assert.equal("capability" in preparedOutput, false);
   const result = spawnSync(
     bun,
     [
-      join(pluginRoot, "dist", "cli.js"),
+      join(pluginRoot, "dist", "authority.js"),
       "approve",
       preparedOutput.operation.id,
       "--data-dir",
@@ -79,7 +79,7 @@ async function approveManifest(preparedOutput) {
   const result = spawnSync(
     bun,
     [
-      join(pluginRoot, "dist", "cli.js"),
+      join(pluginRoot, "dist", "authority.js"),
       "approve-manifest",
       preparedOutput.manifest.id,
       "--data-dir",
@@ -116,7 +116,7 @@ runBun(`
 
 const transport = new StdioClientTransport({
   command: bun,
-  args: [join(pluginRoot, "dist", "cli.js"), "mcp"],
+  args: [join(pluginRoot, "dist", "mcp.js")],
   env: {
     PATH: process.env.PATH ?? "",
     PLUGIN_ROOT: pluginRoot,
@@ -326,6 +326,25 @@ try {
   });
   assert.equal(manifestPrepared.structuredContent.semantics.atomicAcrossSystems, false);
   const manifestCapability = await approveManifest(manifestPrepared.structuredContent);
+  const childAuthorization = await client.callTool({
+    name: "recovery_get_authorization",
+    arguments: { operationId: manifestA.structuredContent.operation.id },
+  });
+  assert.equal(childAuthorization.structuredContent.source, "manifest");
+  assert.equal(childAuthorization.structuredContent.capability, null);
+  const internalChild = JSON.parse(await readFile(
+    join(dataDir, "approvals", `${manifestA.structuredContent.operation.id}.json`),
+    "utf8",
+  ));
+  const bypassAttempt = await client.callTool({
+    name: "recovery_commit_filesystem_delete",
+    arguments: {
+      operationId: manifestA.structuredContent.operation.id,
+      capability: internalChild.capability,
+    },
+  });
+  assert.equal(bypassAttempt.isError, true);
+  assert.equal(await readFile(join(workspace, "manifest-a.txt"), "utf8"), "manifest a");
   const executions = [
     { operationId: manifestA.structuredContent.operation.id },
     { operationId: manifestB.structuredContent.operation.id },

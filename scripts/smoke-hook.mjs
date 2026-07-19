@@ -39,7 +39,7 @@ async function invokeBootstrap(payload, pluginEnvironment = {}) {
 
 async function invoke(payload) {
   const result = await new Promise((resolveResult, reject) => {
-    const child = spawn(bun, [join(pluginRoot, "dist", "cli.js"), "hook"], {
+    const child = spawn(bun, [join(pluginRoot, "dist", "hook.js")], {
       cwd: pluginRoot,
       env: {
         ...process.env,
@@ -66,8 +66,8 @@ try {
   for (const registrations of Object.values(hookManifest.hooks)) {
     for (const registration of registrations) {
       for (const hook of registration.hooks) {
-        assert.match(hook.command, /dist\/cli\.js/);
-        assert.match(hook.commandWindows, /dist\\cli\.js/);
+        assert.match(hook.command, /dist\/hook\.js/);
+        assert.match(hook.commandWindows, /dist\\hook\.js/);
         assert.doesNotMatch(hook.commandWindows, /\.sh/);
       }
     }

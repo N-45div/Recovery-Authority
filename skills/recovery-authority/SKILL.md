@@ -9,7 +9,7 @@ Route destructive filesystem deletes, local SQLite mutations, schema-scoped Post
 
 The bundled `PreToolUse` hook independently blocks recognized destructive Bash and PowerShell commands. Do not retry a denied command through `sudo`, `env`, `sh -c`, PowerShell dynamic invocation, command substitution, a script wrapper, or another execution tool.
 
-Use only Recovery Authority tools already exposed in the agent's native tool list. Never construct an MCP client in a shell, import an MCP transport from an interpreter, or launch `dist/cli.js mcp` manually. If `recovery_orient` is unavailable as a native tool, stop and report that the plugin MCP tools are unavailable.
+Use only Recovery Authority tools already exposed in the agent's native tool list. Never construct an MCP client in a shell, import an MCP transport from an interpreter, or launch `dist/mcp.js` or `dist/cli.js mcp` manually. If `recovery_orient` is unavailable as a native tool, stop and report that the plugin MCP tools are unavailable. Do not print transport bootstrap code into the conversation.
 
 ## Required workflow
 
@@ -36,7 +36,7 @@ Use only Recovery Authority tools already exposed in the agent's native tool lis
 - Exact adapters cover `filesystem.delete`, local `sqlite.mutate`, scoped `postgres.schema-mutate`, and `git.reset-hard`. Other categories are block-only.
 - The living consequence graph is a bounded, derived view of operation, approval, and hook receipts. It does not mint capabilities, override a denial, or prove dependencies that have not been observed.
 - Recovery Manifests compose only independent, already restore-tested operations. They provide ordered commit and reverse recovery, not cross-system atomicity or isolation.
-- An aggregate approval derives exact child capabilities. Both the manifest approval and every child receipt must be bound to the same manifest before commit.
+- An aggregate approval derives exact internal child capabilities. They are redacted from the generic authorization tool and can be consumed only by the manifest coordinator, never by an individual commit tool.
 - A manifest rejects overlapping filesystem scopes and multiple operations against the same PostgreSQL database because one child could invalidate another child's proof.
 - `recovery_orient` reports uncertainty explicitly. Never treat a missing graph edge as evidence that no dependency exists.
 - PostgreSQL accepts one parsed `DELETE`, `UPDATE`, `TRUNCATE`, `DROP TABLE`, `DROP SEQUENCE`, or `DROP INDEX` statement. Direct and referenced relations must remain in the authorized schema.
