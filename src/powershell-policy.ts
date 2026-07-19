@@ -56,6 +56,17 @@ function classifyPowerShellCommand(command: ParsedPowerShellCommand): RiskFindin
   if (["clear-disk", "format-volume", "format", "diskpart", "initialize-disk"].includes(executable)) {
     return [createRiskFinding("filesystem.overwrite", executable, `${executable} can destroy disk or volume state`)];
   }
+  if (["invoke-restmethod", "irm", "invoke-webrequest", "iwr"].includes(executable)) {
+    const source = args.join(" ");
+    const destructive = args.some((arg, index) =>
+      /^(?:-method|-m)$/i.test(arg) && /^(?:delete|patch|put)$/i.test(args[index + 1] ?? ""));
+    if (destructive && /(?:api\.stripe\.com|\/v1\/(?:subscriptions|customers|payment_intents|refunds))/i.test(source)) {
+      return [createRiskFinding("billing.destructive", executable, "direct Stripe API mutation has no exact local recovery adapter")];
+    }
+    if (destructive) {
+      return [createRiskFinding("remote-service.destructive", executable, "remote API mutation has no exact local recovery adapter")];
+    }
+  }
   if (executable === "invoke-expression" || executable === "iex" || executable === "start-process") {
     return [createRiskFinding("opaque.execution", executable, `${executable} executes effects not represented by the parsed command`)];
   }

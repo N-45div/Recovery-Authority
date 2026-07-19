@@ -37,6 +37,7 @@ async function seedFilesystemProof(dataDir: string, status: "pending" | "approve
     recoveredAt: null,
     failure: null,
     records: [{ path: "cache", kind: "directory", mode: 0o755, sha256: null, symlinkTarget: null }],
+    committedPaths: [],
   });
   await mkdir(join(dataDir, "approvals"), { recursive: true });
   await writeFile(join(dataDir, "approvals", `${operationId}.json`), JSON.stringify({
@@ -157,6 +158,7 @@ describe("living consequence graph", () => {
       statementDigest: "statement-digest",
       proofDigest: "sqlite-proof-digest",
       integrityCheck: "ok",
+      drillPostWitness: "sqlite-drill-post-witness",
       postCommitWitness: null,
       createdAt: new Date().toISOString(),
       expiresAt,

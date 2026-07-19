@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSqliteRecoveryService as createUninitializedSqliteService } from "../src/sqlite.js";
 import { initializeAuthority } from "../src/signer.js";
 import { authorizeOperation } from "./authorize.js";
+import { OperationStore } from "../src/store.js";
 
 const temporaryRoots: string[] = [];
 
@@ -87,6 +88,50 @@ describe("SQLite recovery authority", () => {
     const capability = await authorizeOperation(dataDir, prepared.operation);
     expect(service.commit(prepared.operation.id, capability, "DELETE FROM users"))
       .rejects.toThrow("does not match");
+    expect(userNames(databasePath)).toEqual(["Ada", "Grace", "Linus"]);
+  });
+
+  test("rejects commit when the SQLite recovery artifact is corrupt", async () => {
+    const workspace = await temporaryRoot("recovery-sqlite-workspace-");
+    const dataDir = await temporaryRoot("recovery-sqlite-data-");
+    const databasePath = join(workspace, "app.sqlite");
+    createUsersDatabase(databasePath);
+    const service = await createSqliteRecoveryService(dataDir);
+    const sql = "DELETE FROM users WHERE name = 'Grace'";
+    const prepared = await service.prepare({
+      workspaceRoot: workspace,
+      databasePath: "app.sqlite",
+      sql,
+      reason: "Remove one user",
+      ttlSeconds: 300,
+    });
+    await writeFile(join(prepared.operation.artifactDir, "before.sqlite"), "corrupt");
+
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    expect(service.commit(prepared.operation.id, capability, sql)).rejects.toThrow("artifact changed");
+    expect(userNames(databasePath)).toEqual(["Ada", "Grace", "Linus"]);
+  });
+
+  test("recovers an exact drilled mutation left in committing state", async () => {
+    const workspace = await temporaryRoot("recovery-sqlite-workspace-");
+    const dataDir = await temporaryRoot("recovery-sqlite-data-");
+    const databasePath = join(workspace, "app.sqlite");
+    createUsersDatabase(databasePath);
+    const service = await createSqliteRecoveryService(dataDir);
+    const sql = "DELETE FROM users WHERE name = 'Grace'";
+    const prepared = await service.prepare({
+      workspaceRoot: workspace,
+      databasePath: "app.sqlite",
+      sql,
+      reason: "Exercise interrupted commit recovery",
+      ttlSeconds: 300,
+    });
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    const committed = await service.commit(prepared.operation.id, capability, sql);
+    await new OperationStore(dataDir).put({ ...committed, status: "committing", postCommitWitness: null, committedAt: null });
+
+    const recovered = await service.recover(prepared.operation.id);
+    expect(recovered.status).toBe("recovered");
     expect(userNames(databasePath)).toEqual(["Ada", "Grace", "Linus"]);
   });
 

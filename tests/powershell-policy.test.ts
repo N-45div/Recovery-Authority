@@ -23,6 +23,9 @@ describe("PowerShell policy", () => {
     [command("psql", ["psql", "-c", "DROP TABLE users"]), "postgres.schema-mutate"],
     [command("cmd.exe", ["cmd.exe", "/c", "del", "/q", "state.db"]), "filesystem.delete"],
     [command("wsl.exe", ["wsl.exe", "--unregister", "Ubuntu"]), "infrastructure.destructive"],
+    [command("stripe", ["stripe", "subscriptions", "cancel", "sub_live"]), "billing.destructive"],
+    [command("Invoke-RestMethod", ["Invoke-RestMethod", "-Method", "Delete", "https://api.stripe.com/v1/subscriptions/sub_live"]), "billing.destructive"],
+    [command("Invoke-WebRequest", ["Invoke-WebRequest", "-Method", "Delete", "https://api.example.com/accounts/1"]), "remote-service.destructive"],
     [command("Invoke-Expression", ["Invoke-Expression", "$payload"]), "opaque.execution"],
     [command("cleanup.ps1", ["cleanup.ps1"]), "opaque.execution"],
   ])("classifies native AST command %#", (parsedCommand, expected) => {

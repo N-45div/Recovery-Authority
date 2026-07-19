@@ -157,6 +157,24 @@ describe("Git reset recovery authority", () => {
     expect(await readFile(join(repository, "app.txt"), "utf8")).toBe("changed after proof\n");
   });
 
+  test("rejects reset when the Git recovery artifact changes after proof", async () => {
+    const repository = await createRepository();
+    const dataDir = await temporaryRoot("recovery-git-data-");
+    await writeFile(join(repository, "app.txt"), "local work\n");
+    const service = await createGitRecoveryService(dataDir);
+    const prepared = await service.prepare({
+      repositoryRoot: repository,
+      target: "HEAD",
+      reason: "Reject a damaged recovery artifact",
+      ttlSeconds: 300,
+    });
+    await writeFile(join(prepared.operation.artifactDir, "worktree", "app.txt"), "tampered\n");
+
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    expect(service.commit(prepared.operation.id, capability)).rejects.toThrow("artifact changed");
+    expect(await readFile(join(repository, "app.txt"), "utf8")).toBe("local work\n");
+  });
+
   test("does not recover over work added after reset", async () => {
     const repository = await createRepository();
     const dataDir = await temporaryRoot("recovery-git-data-");

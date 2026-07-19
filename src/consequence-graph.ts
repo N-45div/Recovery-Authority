@@ -120,6 +120,8 @@ const BLAST_RADIUS: Record<RiskCategory, number> = {
   "sqlite.mutate": 3,
   "postgres.schema-mutate": 4,
   "database.destructive": 4,
+  "billing.destructive": 5,
+  "remote-service.destructive": 5,
   "remote-storage.delete": 5,
   "infrastructure.destructive": 5,
   "opaque.execution": 5,

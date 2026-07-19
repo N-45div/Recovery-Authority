@@ -14,6 +14,8 @@ export type RiskCategory =
   | "sqlite.mutate"
   | "postgres.schema-mutate"
   | "database.destructive"
+  | "billing.destructive"
+  | "remote-service.destructive"
   | "remote-storage.delete"
   | "infrastructure.destructive"
   | "opaque.execution";
@@ -118,6 +120,7 @@ function shellMcpBootstrap(executable: string, args: string[]): RiskFinding[] {
   const source = args.join(" ");
   if (
     /(?:StdioClientTransport|@modelcontextprotocol\/sdk\/client)/.test(source) ||
+    /(?:^|\/)(?:mcp\.js|mcp\.ts)\b/.test(source) ||
     (/(?:^|\/)(?:cli\.js|cli\.ts)\b/.test(source) && /\bmcp\b/.test(source))
   ) {
     return [finding(
@@ -155,7 +158,7 @@ export function classifyCommandWords(input: string[], assignments: string[] = []
     executable === "recovery-authority-approve" ||
     (["bash", "sh", "zsh", "dash", "bun", "node"].includes(executable) &&
       (args.some((arg) => /(?:^|\/)(?:approve-operation\.sh|approve\.js|approve\.ts)$/.test(arg)) ||
-        (args.some((arg) => /(?:^|\/)(?:cli\.js|cli\.ts)$/.test(arg)) &&
+        (args.some((arg) => /(?:^|\/)(?:cli\.js|cli\.ts|authority\.js|authority\.ts)$/.test(arg)) &&
           (args.includes("approve") || args.includes("approve-manifest")))))
   ) {
     return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
@@ -175,6 +178,22 @@ export function classifyCommandWords(input: string[], assignments: string[] = []
   }
   if (executable === "tee" && !args.includes("-a") && !args.includes("--append")) {
     return [finding("filesystem.overwrite", executable, "tee replaces destination contents unless append mode is explicit")];
+  }
+  if (executable === "cp" && args.some((arg) => arg === "-f" || arg === "--force" || /^-[^-]*f/.test(arg))) {
+    return [finding("filesystem.overwrite", executable, "forced copy can replace an existing destination")];
+  }
+  if (executable === "mv") {
+    return [finding("filesystem.overwrite", executable, "move removes the source and can replace an existing destination")];
+  }
+  if (executable === "install" && args.some((arg) => !arg.startsWith("-"))) {
+    return [finding("filesystem.overwrite", executable, "install can replace destination file contents and metadata")];
+  }
+  if (executable === "sed" && args.some((arg) => arg === "-i" || arg.startsWith("-i"))) {
+    return [finding("filesystem.overwrite", executable, "sed in-place editing replaces existing file contents")];
+  }
+  if (["tar", "unzip", "7z"].includes(executable) && args.some((arg) =>
+    arg === "-x" || arg.startsWith("-x") || ["x", "extract"].includes(arg.toLowerCase()))) {
+    return [finding("filesystem.overwrite", executable, "archive extraction can overwrite existing destination paths")];
   }
   if (executable === "rsync" && args.some((arg) => arg === "--delete" || arg === "--del" || arg.startsWith("--delete-") || arg === "--remove-source-files")) {
     return [finding("filesystem.sync-delete", executable, "rsync is configured to remove source or destination entries")];
@@ -236,6 +255,20 @@ export function classifyCommandWords(input: string[], assignments: string[] = []
   if (["aws", "gcloud", "az"].includes(executable) && args.some((arg) => ["delete", "remove", "rm", "terminate-instances"].includes(arg))) {
     return [finding("infrastructure.destructive", executable, `${executable} command removes remote resources`)];
   }
+  if (executable === "stripe" && args.some((arg) => /^(?:cancel|delete|expire|void|refund)$/i.test(arg))) {
+    return [finding("billing.destructive", executable, "Stripe operation can cancel billing state, delete a customer, void payment state, or issue money")];
+  }
+  if (executable === "curl") {
+    const source = args.join(" ");
+    const destructiveMethod = args.some((arg, index) =>
+      ["-x", "--request"].includes(arg.toLowerCase()) && /^(?:delete|patch|put)$/i.test(args[index + 1] ?? ""));
+    if (destructiveMethod && /(?:api\.stripe\.com|\/v1\/(?:subscriptions|customers|payment_intents|refunds))/i.test(source)) {
+      return [finding("billing.destructive", executable, "direct Stripe API mutation has no exact local recovery adapter")];
+    }
+    if (destructiveMethod) {
+      return [finding("remote-service.destructive", executable, "remote API mutation has no exact local recovery adapter")];
+    }
+  }
   if (
     (executable === "prisma" && args.includes("reset")) ||
     (["rails", "rake"].includes(executable) && args.some((arg) => /db:(?:drop|reset|purge)/.test(arg))) ||
@@ -264,6 +297,9 @@ function walk(value: unknown, findings: RiskFinding[]): void {
   if (!value || typeof value !== "object") return;
   const node = value as Record<string, unknown>;
   if (node.type === "Command") findings.push(...classifyCommandWords(commandWords(node), assignmentWords(node)));
+  if (node.type === "Redirect" && [">", ">|"].includes(text(node.op) ?? "")) {
+    findings.push(finding("filesystem.overwrite", "shell", `output redirection truncates ${text(node.file) ?? "a destination file"}`));
+  }
   for (const nested of Object.values(node)) walk(nested, findings);
 }
 

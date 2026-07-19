@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFilesystemRecoveryService as createUninitializedFilesystemService } from "../src/filesystem.js";
@@ -70,6 +70,39 @@ describe("filesystem recovery authority", () => {
       "Protected state changed",
     );
     expect(await readFile(join(workspace, "state.txt"), "utf8")).toBe("changed after proof");
+  });
+
+  test("rejects commit when the recovery artifact changes after proof", async () => {
+    const workspace = await temporaryRoot("recovery-workspace-");
+    const dataDir = await temporaryRoot("recovery-data-");
+    await writeFile(join(workspace, "state.txt"), "original");
+    const service = await createFilesystemRecoveryService(dataDir);
+    const prepared = await service.prepare({
+      workspaceRoot: workspace,
+      paths: ["state.txt"],
+      reason: "Delete generated state",
+      ttlSeconds: 300,
+    });
+    await writeFile(join(prepared.operation.artifactDir, "payload", "state.txt"), "tampered");
+
+    const capability = await authorizeOperation(dataDir, prepared.operation);
+    expect(service.commit(prepared.operation.id, capability)).rejects.toThrow("artifact changed");
+    expect(await readFile(join(workspace, "state.txt"), "utf8")).toBe("original");
+  });
+
+  test("rejects hard-linked files whose identity cannot be restored exactly", async () => {
+    const workspace = await temporaryRoot("recovery-workspace-");
+    const dataDir = await temporaryRoot("recovery-data-");
+    await writeFile(join(workspace, "state.txt"), "shared");
+    await link(join(workspace, "state.txt"), join(workspace, "alias.txt"));
+    const service = await createFilesystemRecoveryService(dataDir);
+
+    expect(service.prepare({
+      workspaceRoot: workspace,
+      paths: ["state.txt"],
+      reason: "Unsupported hard-link deletion",
+      ttlSeconds: 300,
+    })).rejects.toThrow("Hard-linked files");
   });
 
   test("rejects workspace escape", async () => {

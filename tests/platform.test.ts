@@ -21,8 +21,8 @@ describe("platform adapters", () => {
   });
 
   test("formats approval commands for POSIX and PowerShell without shell scripts", () => {
-    const posix = formatApprovalCommand("/opt/plugin/dist/cli.js", "op-1", "/tmp/data", "/tmp/keys", "linux");
-    expect(posix).toContain("bun '/opt/plugin/dist/cli.js' 'approve' 'op-1'");
+    const posix = formatApprovalCommand("/opt/plugin/dist/authority.js", "op-1", "/tmp/data", "/tmp/keys", "linux");
+    expect(posix).toContain("bun '/opt/plugin/dist/authority.js' 'approve' 'op-1'");
     expect(posix).not.toContain(".sh");
 
     const windows = formatApprovalCommand(
@@ -35,8 +35,8 @@ describe("platform adapters", () => {
     expect(windows).toContain("& bun 'C:\\Program Files\\Recovery Authority\\dist\\cli.js' 'approve' 'op''2'");
     expect(windows).not.toContain(".sh");
 
-    const manifest = formatManifestApprovalCommand("/opt/plugin/dist/cli.js", "manifest-1", "/tmp/data", "/tmp/keys", "linux");
-    expect(manifest).toContain("bun '/opt/plugin/dist/cli.js' 'approve-manifest' 'manifest-1'");
+    const manifest = formatManifestApprovalCommand("/opt/plugin/dist/authority.js", "manifest-1", "/tmp/data", "/tmp/keys", "linux");
+    expect(manifest).toContain("bun '/opt/plugin/dist/authority.js' 'approve-manifest' 'manifest-1'");
   });
 
   test("uses named pipes on Windows and Unix sockets elsewhere", () => {

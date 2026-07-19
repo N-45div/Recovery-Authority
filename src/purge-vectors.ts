@@ -123,4 +123,12 @@ export const PURGE_VECTOR_CORPUS: readonly PurgeVector[] = [
     sourceUrl: "https://developer.hashicorp.com/terraform/cli/commands/destroy",
     evidence: "official-semantics",
   },
+  {
+    id: "stripe-subscription-cancel",
+    command: "curl -X DELETE https://api.stripe.com/v1/subscriptions/sub_live",
+    expectedCategory: "billing.destructive",
+    mechanism: "Stripe cancellation is immediate and a canceled subscription cannot be reactivated or updated.",
+    sourceUrl: "https://docs.stripe.com/api/subscriptions/cancel?lang=curl",
+    evidence: "official-semantics",
+  },
 ] as const;
