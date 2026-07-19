@@ -111,6 +111,25 @@ Expected final line:
 Demo complete: proof, human approval, exact commit, and verified recovery.
 ```
 
+For a live Linux control-room walkthrough, first install and enable the plugin,
+build the release TUI, and run:
+
+```bash
+bun run demo:live --check
+bun run demo:live
+```
+
+This opens a tmux session with a sandboxed Codex agent and separate human approval
+pane in the `agent` window, plus a Rust TUI in the `mission` window. Both use the
+same host-owned evidence ledger outside the writable repository. Switch windows
+with `Ctrl-b n`; the TUI updates as the agent orients, prepares recovery, requests
+approval, commits, restores, and records evidence.
+
+The preflight also inspects the installed plugin and fails closed unless its MCP
+worker forwards the host authority sockets. Approval commands in this flow must
+reference `$HOME/.local/share/recovery-authority/live-sessions/...`, never a path
+inside the repository.
+
 For a code-only check without Docker:
 
 ```bash

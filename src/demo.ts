@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +10,13 @@ import { fileURLToPath } from "node:url";
 const pluginRoot = resolve(process.env.PLUGIN_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const container = `recovery-authority-demo-${randomUUID().slice(0, 8)}`;
 const connectionUri = "postgresql://postgres:recovery@127.0.0.1:5432/app";
-const temporaryRoot = await mkdtemp(join(tmpdir(), "recovery-authority-demo-"));
-const dataDir = join(temporaryRoot, "authority");
+const dataDirOption = process.argv.indexOf("--data-dir");
+if (dataDirOption >= 0 && !process.argv[dataDirOption + 1]) throw new Error("--data-dir requires a path");
+const retainedDataDir = process.env.RECOVERY_AUTHORITY_DEMO_DATA_DIR ??
+  (dataDirOption >= 0 ? process.argv[dataDirOption + 1] : undefined);
+const temporaryRoot = retainedDataDir ? null : await mkdtemp(join(tmpdir(), "recovery-authority-demo-"));
+const dataDir = resolve(retainedDataDir ?? join(temporaryRoot as string, "authority"));
+await mkdir(dataDir, { recursive: true, mode: 0o700 });
 let client: Client | null = null;
 
 function docker(args: string[], input?: string): string {
@@ -49,7 +54,7 @@ function rows(): string {
 
 async function main(): Promise<void> {
   process.stdout.write("Recovery Authority: proof-bound PostgreSQL authorization\n\n");
-  process.stdout.write("[1/6] Launching disposable PostgreSQL 17\n");
+  process.stdout.write("[1/7] Launching disposable PostgreSQL 17\n");
   docker([
     "run", "--detach", "--rm", "--name", container,
     "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,size=256m",
@@ -59,7 +64,7 @@ async function main(): Promise<void> {
   ]);
   await waitForDatabase();
 
-  process.stdout.write("[2/6] Seeding public data and a cross-schema cascade\n");
+  process.stdout.write("[2/7] Seeding public data and a cross-schema cascade\n");
   query(`
     CREATE TABLE public.users (id bigint PRIMARY KEY, name text NOT NULL);
     CREATE SCHEMA audit;
@@ -91,7 +96,24 @@ async function main(): Promise<void> {
   await client.connect(transport);
 
   const sql = "DELETE FROM public.users WHERE name = 'Grace'";
-  process.stdout.write("[3/6] Creating full-database artifact and running isolated restore drill\n");
+  const proposedCommand = `psql app --command \"${sql}\"`;
+  process.stdout.write("[3/7] Orienting to consequences and minimum safe cut\n");
+  const initialOrientation = await client.callTool({
+    name: "recovery_orient",
+    arguments: {
+      goal: "Delete one account and preserve database-local cascades",
+      command: proposedCommand,
+      shellDialect: "posix",
+    },
+  });
+  const initialOutput = initialOrientation.structuredContent as {
+    readiness: { recoveryCoverage: number; authority: number; uncertainty: number };
+    safeCut: Array<{ requirement: string }>;
+  };
+  process.stdout.write(`      VECTOR  recovery=${initialOutput.readiness.recoveryCoverage} authority=${initialOutput.readiness.authority} uncertainty=${initialOutput.readiness.uncertainty}\n`);
+  process.stdout.write(`      SAFE CUT ${initialOutput.safeCut.map((item) => item.requirement).join(", ")}\n`);
+
+  process.stdout.write("[4/7] Creating full-database artifact and running isolated restore drill\n");
   const prepared = await client.callTool({
     name: "recovery_prepare_postgres_mutation",
     arguments: {
@@ -109,7 +131,7 @@ async function main(): Promise<void> {
   process.stdout.write(`      PROOF   ${preparedOutput.operation.proofDigest}\n`);
   process.stdout.write(`      STATUS  ${preparedOutput.authorization.status}; capability withheld\n`);
 
-  process.stdout.write("[4/6] Waiting for separate human authorization\n");
+  process.stdout.write("[5/7] Waiting for separate human authorization\n");
   const approval = spawnSync(
     process.execPath,
     [
@@ -133,7 +155,17 @@ async function main(): Promise<void> {
   if (approved.status !== "approved" || !approved.capability) throw new Error("Approval did not produce a capability");
   process.stdout.write(`      APPROVAL ${approved.approvalDigest}\n`);
 
-  process.stdout.write("[5/6] Committing the exact approved SQL\n");
+  await client.callTool({
+    name: "recovery_orient",
+    arguments: {
+      goal: "Commit only the exact restore-tested account deletion",
+      command: proposedCommand,
+      operationId: preparedOutput.operation.id,
+      shellDialect: "posix",
+    },
+  });
+
+  process.stdout.write("[6/7] Committing the exact approved SQL\n");
   const committed = await client.callTool({
     name: "recovery_commit_postgres_mutation",
     arguments: {
@@ -149,13 +181,25 @@ async function main(): Promise<void> {
   }
   process.stdout.write(`      AFTER   ${rows()}\n`);
 
-  process.stdout.write("[6/6] Restoring the proven artifact and verifying both schemas\n");
+  process.stdout.write("[7/7] Restoring the proven artifact and verifying both schemas\n");
   await client.callTool({
     name: "recovery_restore_postgres_mutation",
     arguments: { operationId: preparedOutput.operation.id, connectionUri },
   });
   process.stdout.write(`      RESTORED ${rows()}\n\n`);
+  await client.callTool({
+    name: "recovery_orient",
+    arguments: {
+      goal: "Verify the account deletion was recovered",
+      command: proposedCommand,
+      operationId: preparedOutput.operation.id,
+      shellDialect: "posix",
+    },
+  });
   process.stdout.write("Demo complete: proof, human approval, exact commit, and verified recovery.\n");
+  if (retainedDataDir) {
+    process.stdout.write(`Evidence ledger retained for the TUI at ${dataDir}\n`);
+  }
 }
 
 try {
@@ -164,5 +208,5 @@ try {
   const connectedClient = client as Client | null;
   if (connectedClient) await connectedClient.close().catch(() => undefined);
   spawnSync("docker", ["rm", "--force", container], { encoding: "utf8" });
-  await rm(temporaryRoot, { recursive: true, force: true });
+  if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true });
 }
