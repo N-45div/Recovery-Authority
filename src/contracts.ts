@@ -87,7 +87,7 @@ export const FileRecord = z.object({
 
 const RecoveryOperationBase = z.object({
   id: z.string().uuid(),
-  status: z.enum(["proven", "committed", "recovered", "expired", "failed"]),
+  status: z.enum(["proven", "committing", "committed", "recovered", "expired", "failed"]),
   workspaceRoot: z.string(),
   paths: z.array(z.string()),
   reason: z.string(),
@@ -104,6 +104,7 @@ const RecoveryOperationBase = z.object({
 export const FilesystemRecoveryOperation = RecoveryOperationBase.extend({
   kind: z.literal("filesystem.delete"),
   records: z.array(FileRecord),
+  committedPaths: z.array(z.string()).default([]),
 });
 
 export const SqliteRecoveryOperation = RecoveryOperationBase.extend({
@@ -111,6 +112,7 @@ export const SqliteRecoveryOperation = RecoveryOperationBase.extend({
   databasePath: z.string(),
   statementDigest: z.string(),
   integrityCheck: z.literal("ok"),
+  drillPostWitness: z.string().nullable().default(null),
   postCommitWitness: z.string().nullable(),
 });
 
@@ -123,6 +125,7 @@ export const GitResetHardRecoveryOperation = RecoveryOperationBase.extend({
   records: z.array(FileRecord),
   indexDigest: z.string(),
   indexMode: z.number().int(),
+  drillPostWitness: z.string().nullable().default(null),
   postCommitWitness: z.string().nullable(),
 });
 
@@ -131,6 +134,7 @@ export const PostgresRecoveryOperation = RecoveryOperationBase.extend({
   schema: z.string(),
   backupScope: z.literal("database"),
   connectionFingerprint: z.string(),
+  connectionDisplay: z.string().default("PostgreSQL database (legacy operation; connection identity unavailable)"),
   statementDigest: z.string(),
   artifactDigest: z.string(),
   drillPostWitness: z.string(),

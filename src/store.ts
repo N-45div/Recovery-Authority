@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { atomicWriteFile, withFileLock } from "./atomic-file.js";
 import { RecoveryOperation, type RecoveryOperation as RecoveryOperationType } from "./contracts.js";
 
 interface StoreDocument {
@@ -32,19 +33,33 @@ export class OperationStore {
   }
 
   private async write(document: StoreDocument): Promise<void> {
-    const temporaryPath = `${this.path}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporaryPath, this.path);
+    await atomicWriteFile(this.path, `${JSON.stringify(document, null, 2)}\n`);
   }
 
   async put(operation: RecoveryOperationType): Promise<void> {
-    const update = this.writeQueue.then(async () => {
+    const update = this.writeQueue.then(() => withFileLock(this.path, async () => {
       const document = await this.read();
       document.operations[operation.id] = RecoveryOperation.parse(operation);
       await this.write(document);
-    });
+    }));
     this.writeQueue = update.catch(() => undefined);
     await update;
+  }
+
+  async beginCommit(id: string): Promise<RecoveryOperationType> {
+    let started: RecoveryOperationType | undefined;
+    const update = this.writeQueue.then(() => withFileLock(this.path, async () => {
+      const document = await this.read();
+      const operation = document.operations[id];
+      if (!operation) throw new Error(`Unknown recovery operation: ${id}`);
+      if (operation.status !== "proven") throw new Error(`Operation is not committable: ${operation.status}`);
+      started = RecoveryOperation.parse({ ...operation, status: "committing", failure: null });
+      document.operations[id] = started;
+      await this.write(document);
+    }));
+    this.writeQueue = update.catch(() => undefined);
+    await update;
+    return started as RecoveryOperationType;
   }
 
   async get(id: string): Promise<RecoveryOperationType> {

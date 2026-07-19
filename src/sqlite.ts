@@ -32,12 +32,13 @@ function assertIntegrity(database: Database): void {
   }
 }
 
-function drillMutation(snapshot: Buffer, sql: string): void {
+function drillMutation(snapshot: Buffer, sql: string): string {
   const database = Database.deserialize(snapshot, { strict: true });
   try {
     const mutate = database.transaction(() => database.exec(sql));
     mutate.immediate();
     assertIntegrity(database);
+    return sha256(database.serialize());
   } finally {
     database.close();
   }
@@ -62,7 +63,7 @@ export class SqliteRecoveryService {
 
     const snapshot = serializeDatabase(databasePath, true);
     const stateWitness = sha256(snapshot);
-    drillMutation(snapshot, input.sql);
+    const drillPostWitness = drillMutation(snapshot, input.sql);
 
     const id = randomUUID();
     const artifactDir = join(this.dataDir, "artifacts", id);
@@ -95,6 +96,7 @@ export class SqliteRecoveryService {
       statementDigest,
       proofDigest,
       integrityCheck: "ok",
+      drillPostWitness,
       postCommitWitness: null,
       createdAt: createdAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
@@ -124,12 +126,21 @@ export class SqliteRecoveryService {
     }
 
     const databasePath = join(operation.workspaceRoot, operation.databasePath);
+    const snapshot = await readFile(join(operation.artifactDir, "before.sqlite"));
+    if (sha256(snapshot) !== operation.stateWitness) throw new Error("SQLite recovery artifact changed after the proof was issued");
+    const artifactDatabase = Database.deserialize(snapshot, { readonly: true, strict: true });
+    try {
+      assertIntegrity(artifactDatabase);
+    } finally {
+      artifactDatabase.close();
+    }
     const database = new Database(databasePath, { create: false, strict: true });
     let postCommitWitness: string;
     try {
       if (sha256(database.serialize()) !== operation.stateWitness) {
         throw new Error("Protected SQLite state changed after the recovery proof was issued");
       }
+      await this.store.beginCommit(operation.id);
       const mutate = database.transaction(() => database.exec(sql));
       mutate.immediate();
       assertIntegrity(database);
@@ -150,11 +161,18 @@ export class SqliteRecoveryService {
 
   async recover(operationId: string): Promise<SqliteRecoveryOperation> {
     const operation = await this.get(operationId);
-    if (operation.status !== "committed" || !operation.postCommitWitness) {
+    if (!["committing", "committed"].includes(operation.status)) {
       throw new Error(`Operation is not recoverable from status: ${operation.status}`);
     }
     const databasePath = join(operation.workspaceRoot, operation.databasePath);
-    if (sha256(serializeDatabase(databasePath, true)) !== operation.postCommitWitness) {
+    const currentWitness = sha256(serializeDatabase(databasePath, true));
+    if (currentWitness === operation.stateWitness && operation.status === "committing") {
+      const recovered: SqliteRecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
+      await this.store.put(recovered);
+      return recovered;
+    }
+    const expectedPostWitness = operation.postCommitWitness ?? operation.drillPostWitness;
+    if (!expectedPostWitness || currentWitness !== expectedPostWitness) {
       throw new Error("SQLite recovery would overwrite state changed after the authorized mutation");
     }
 

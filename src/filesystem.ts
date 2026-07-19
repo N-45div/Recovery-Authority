@@ -40,6 +40,7 @@ export async function collectRecords(root: string, absolutePath: string): Promis
     return [{ path, kind: "symlink", mode: stat.mode, sha256: null, symlinkTarget: await readlink(absolutePath) }];
   }
   if (stat.isFile()) {
+    if (stat.nlink !== 1) throw new Error(`Hard-linked files are outside exact filesystem recovery: ${path}`);
     return [{ path, kind: "file", mode: stat.mode, sha256: await hashFile(absolutePath), symlinkTarget: null }];
   }
   if (!stat.isDirectory()) throw new Error(`Unsupported filesystem object: ${path}`);
@@ -137,6 +138,7 @@ export class FilesystemRecoveryService {
       reason: input.reason,
       artifactDir,
       records,
+      committedPaths: [],
       stateWitness,
       proofDigest,
       createdAt: createdAt.toISOString(),
@@ -166,11 +168,27 @@ export class FilesystemRecoveryService {
 
     const currentRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join(operation.workspaceRoot, path))))).flat();
     if (recordsWitness(currentRecords) !== operation.stateWitness) throw new Error("Protected state changed after the recovery proof was issued");
-
-    for (const path of [...operation.paths].sort((a, b) => b.length - a.length)) {
-      await rm(join(operation.workspaceRoot, path), { recursive: true, force: false });
+    const payloadRoot = join(operation.artifactDir, "payload");
+    const artifactRecords = (await Promise.all(operation.paths.map((path) => collectRecords(payloadRoot, join(payloadRoot, path))))).flat();
+    if (recordsWitness(artifactRecords) !== operation.stateWitness) {
+      throw new Error("Filesystem recovery artifact changed after the proof was issued");
     }
-    const committed: FilesystemRecoveryOperation = { ...operation, status: "committed", committedAt: new Date().toISOString() };
+
+    const started = await this.store.beginCommit(operation.id);
+    if (started.kind !== "filesystem.delete") throw new Error("Operation kind changed during commit transition");
+    let progress: FilesystemRecoveryOperation = started;
+    for (const path of [...operation.paths].sort((a, b) => b.length - a.length)) {
+      try {
+        await rm(join(operation.workspaceRoot, path), { recursive: true, force: false });
+        progress = { ...progress, committedPaths: [...progress.committedPaths, path] };
+        await this.store.put(progress);
+      } catch (error) {
+        progress = { ...progress, failure: error instanceof Error ? error.message : String(error) };
+        await this.store.put(progress);
+        throw error;
+      }
+    }
+    const committed: FilesystemRecoveryOperation = { ...progress, status: "committed", committedAt: new Date().toISOString() };
     await this.store.put(committed);
     return committed;
   }
@@ -178,13 +196,21 @@ export class FilesystemRecoveryService {
   async recover(operationId: string): Promise<FilesystemRecoveryOperation> {
     const operation = await this.store.get(operationId);
     if (operation.kind !== "filesystem.delete") throw new Error(`Operation is not a filesystem delete: ${operation.kind}`);
-    if (operation.status !== "committed") throw new Error(`Operation is not recoverable from status: ${operation.status}`);
+    if (!["committing", "committed"].includes(operation.status)) throw new Error(`Operation is not recoverable from status: ${operation.status}`);
+    const payloadRoot = join(operation.artifactDir, "payload");
     for (const path of operation.paths) {
-      if (await pathExists(join(operation.workspaceRoot, path))) {
-        throw new Error(`Recovery would overwrite live state: ${path}`);
+      const destination = join(operation.workspaceRoot, path);
+      if (await pathExists(destination)) {
+        const liveRecords = await collectRecords(operation.workspaceRoot, destination);
+        const expected = operation.records.filter((record) => record.path === path || record.path.startsWith(`${path}/`));
+        if (recordsWitness(liveRecords) !== recordsWitness(expected)) {
+          throw new Error(`Recovery would overwrite live state changed during an interrupted commit: ${path}`);
+        }
+        continue;
       }
+      const records = operation.records.filter((record) => record.path === path || record.path.startsWith(`${path}/`));
+      await restoreRecords(payloadRoot, operation.workspaceRoot, records);
     }
-    await restoreRecords(join(operation.artifactDir, "payload"), operation.workspaceRoot, operation.records);
     const restoredRecords = (await Promise.all(operation.paths.map((path) => collectRecords(operation.workspaceRoot, join(operation.workspaceRoot, path))))).flat();
     if (recordsWitness(restoredRecords) !== operation.stateWitness) throw new Error("Recovery completed but invariant verification failed");
     const recovered: FilesystemRecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };

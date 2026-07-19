@@ -1,10 +1,11 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { RecoveryOperation } from "./contracts.js";
 import type { CapabilityVerifier } from "./crypto.js";
 import { PublicCapabilityVerifier } from "./crypto.js";
 import { OperationStore } from "./store.js";
+import { atomicWriteFile } from "./atomic-file.js";
 
 const AuthorizationRecordSchema = z.object({
   operationId: z.string().uuid(),
@@ -44,9 +45,7 @@ export class AuthorizationRegistry {
   protected async write(record: AuthorizationRecord): Promise<void> {
     await mkdir(this.approvalsDir, { recursive: true, mode: 0o700 });
     const path = this.path(record.operationId);
-    const temporaryPath = `${path}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporaryPath, path);
+    await atomicWriteFile(path, `${JSON.stringify(record, null, 2)}\n`);
   }
 
   private async read(operationId: string): Promise<AuthorizationRecord> {
@@ -103,6 +102,22 @@ export class AuthorizationRegistry {
       throw new Error(`Human authorization is not approved: ${record.status}`);
     }
     if (record.capability !== capability) throw new Error("Capability does not match the human-approved authorization");
+  }
+
+  async assertIndividualAuthorized(operationId: string, capability: string): Promise<void> {
+    const record = await this.get(operationId);
+    if (record.source !== "individual") {
+      throw new Error("Manifest child capabilities may only be consumed by the manifest coordinator");
+    }
+    await this.assertAuthorized(operationId, capability);
+  }
+
+  async assertManifestChildAuthorized(operationId: string, manifestId: string, capability: string): Promise<void> {
+    const record = await this.get(operationId);
+    if (record.source !== "manifest" || record.manifestId !== manifestId) {
+      throw new Error("Capability is not derived from this recovery manifest");
+    }
+    await this.assertAuthorized(operationId, capability);
   }
 }
 

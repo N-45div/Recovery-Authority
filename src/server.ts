@@ -49,7 +49,7 @@ const authorityWorkspaceRoot = process.env.RECOVERY_AUTHORITY_WORKSPACE_ROOT
 const pluginRoot = process.env.PLUGIN_ROOT
   ? resolve(process.env.PLUGIN_ROOT)
   : resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cliEntry = resolve(pluginRoot, "dist", "cli.js");
+const authorityEntry = resolve(pluginRoot, "dist", "authority.js");
 const store = new OperationStore(dataDir);
 const verifier = await PublicCapabilityVerifier.load(dataDir);
 const approvals = new AuthorizationRegistry(dataDir, store, verifier);
@@ -80,7 +80,7 @@ function authorizationView<T extends { operationId: string; status: string }>(au
   return {
     ...authorization,
     approvalCommand: authorization.status === "pending"
-      ? formatApprovalCommand(cliEntry, authorization.operationId, dataDir, keyDir)
+      ? formatApprovalCommand(authorityEntry, authorization.operationId, dataDir, keyDir)
       : null,
   };
 }
@@ -89,13 +89,13 @@ function manifestAuthorizationView<T extends { manifestId: string; status: strin
   return {
     ...authorization,
     approvalCommand: authorization.status === "pending"
-      ? formatManifestApprovalCommand(cliEntry, authorization.manifestId, dataDir, keyDir)
+      ? formatManifestApprovalCommand(authorityEntry, authorization.manifestId, dataDir, keyDir)
       : null,
   };
 }
 
 const server = new McpServer(
-  { name: "recovery-authority", version: "0.11.0" },
+  { name: "recovery-authority", version: "0.12.0" },
   {
     instructions:
       "Call recovery_orient before destructive or delegated work to inspect consequence coverage, uncertainty, and the minimum safe cut. For supported filesystem, SQLite, PostgreSQL, and Git hard-reset effects, prepare first, inspect the restore-tested proof, wait for separate human approval, retrieve authorization, and commit only with the approved capability. Raw destructive commands remain blocked even after approval. Hook coverage applies only when the bundled hook is trusted.",
@@ -331,7 +331,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitFilesystemDeleteInput.parse(input);
-    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
+    await approvals.assertIndividualAuthorized(parsed.operationId, parsed.capability);
     const operation = await filesystemService.commit(parsed.operationId, parsed.capability);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -391,7 +391,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitGitResetHardInput.parse(input);
-    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
+    await approvals.assertIndividualAuthorized(parsed.operationId, parsed.capability);
     const operation = await gitService.commit(parsed.operationId, parsed.capability);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -451,7 +451,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitSqliteMutationInput.parse(input);
-    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
+    await approvals.assertIndividualAuthorized(parsed.operationId, parsed.capability);
     const operation = await sqliteService.commit(parsed.operationId, parsed.capability, parsed.sql);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -509,7 +509,7 @@ server.registerTool(
   },
   async (input) => {
     const parsed = CommitPostgresMutationInput.parse(input);
-    await approvals.assertAuthorized(parsed.operationId, parsed.capability);
+    await approvals.assertIndividualAuthorized(parsed.operationId, parsed.capability);
     const operation = await postgresService.commit(parsed.operationId, parsed.capability, parsed.connectionUri, parsed.sql);
     return {
       content: [{ type: "text", text: JSON.stringify(operation, null, 2) }],
@@ -546,7 +546,10 @@ server.registerTool(
   },
   async (input) => {
     const parsed = OperationInput.parse(input);
-    const authorization = authorizationView(await approvals.get(parsed.operationId));
+    const stored = await approvals.get(parsed.operationId);
+    const authorization = authorizationView(stored.source === "manifest"
+      ? { ...stored, capability: null }
+      : stored);
     return {
       content: [{ type: "text", text: JSON.stringify(authorization, null, 2) }],
       structuredContent: authorization,

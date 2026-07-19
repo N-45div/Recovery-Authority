@@ -170,9 +170,11 @@ export class GitRecoveryService {
 
     const drillParent = await mkdtemp(join(tmpdir(), "recovery-authority-git-proof-"));
     const drillRepository = join(drillParent, basename(repositoryRoot));
+    let drillPostWitness: string;
     try {
       await cp(repositoryRoot, drillRepository, { recursive: true, dereference: false, preserveTimestamps: true });
       await runGit(drillRepository, ["reset", "--hard", targetCommit]);
+      drillPostWitness = (await readGitState(drillRepository)).witness;
       await restoreGitState(drillRepository, payloadRoot, original.head, original.index, original.indexMode);
       const restored = await readGitState(drillRepository);
       if (restored.witness !== original.witness) throw new Error("Git restore drill produced a different state witness");
@@ -206,6 +208,7 @@ export class GitRecoveryService {
       originalHeadRef: original.headRef,
       indexDigest: original.indexDigest,
       indexMode: original.indexMode,
+      drillPostWitness,
       postCommitWitness: null,
       createdAt: createdAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
@@ -232,7 +235,14 @@ export class GitRecoveryService {
     if ((await readGitState(operation.repositoryRoot)).witness !== operation.stateWitness) {
       throw new Error("Protected Git state changed after the recovery proof was issued");
     }
+    const index = await readFile(join(operation.artifactDir, "index"));
+    if (sha256(index) !== operation.indexDigest) throw new Error("Git index recovery artifact changed after the proof was issued");
+    const artifactRecords = await collectWorktreeRecords(join(operation.artifactDir, "worktree"));
+    if (recordsWitness(artifactRecords) !== recordsWitness(operation.records)) {
+      throw new Error("Git worktree recovery artifact changed after the proof was issued");
+    }
 
+    await this.store.beginCommit(operation.id);
     await runGit(operation.repositoryRoot, ["reset", "--hard", operation.targetCommit]);
     const postCommitWitness = (await readGitState(operation.repositoryRoot)).witness;
     const committed: GitResetHardRecoveryOperation = {
@@ -247,10 +257,17 @@ export class GitRecoveryService {
 
   async recover(operationId: string): Promise<GitResetHardRecoveryOperation> {
     const operation = await this.get(operationId);
-    if (operation.status !== "committed" || !operation.postCommitWitness) {
+    if (!["committing", "committed"].includes(operation.status)) {
       throw new Error(`Operation is not recoverable from status: ${operation.status}`);
     }
-    if ((await readGitState(operation.repositoryRoot)).witness !== operation.postCommitWitness) {
+    const currentWitness = (await readGitState(operation.repositoryRoot)).witness;
+    if (currentWitness === operation.stateWitness && operation.status === "committing") {
+      const recovered: GitResetHardRecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
+      await this.store.put(recovered);
+      return recovered;
+    }
+    const expectedPostWitness = operation.postCommitWitness ?? operation.drillPostWitness;
+    if (!expectedPostWitness || currentWitness !== expectedPostWitness) {
       throw new Error("Git recovery would overwrite state changed after the authorized reset");
     }
     const index = await readFile(join(operation.artifactDir, "index"));

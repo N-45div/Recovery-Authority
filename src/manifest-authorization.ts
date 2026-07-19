@@ -1,9 +1,10 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { CapabilityVerifier } from "./crypto.js";
 import type { RecoveryManifest } from "./manifest-contracts.js";
 import { ManifestStore } from "./manifest-store.js";
+import { atomicWriteFile } from "./atomic-file.js";
 
 const ManifestAuthorizationRecordSchema = z.object({
   manifestId: z.string().uuid(),
@@ -36,9 +37,7 @@ export class ManifestAuthorizationRegistry {
   protected async write(record: ManifestAuthorizationRecord): Promise<void> {
     await mkdir(this.approvalsDir, { recursive: true, mode: 0o700 });
     const path = this.path(record.manifestId);
-    const temporaryPath = `${path}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporaryPath, path);
+    await atomicWriteFile(path, `${JSON.stringify(record, null, 2)}\n`);
   }
 
   private async read(manifestId: string): Promise<ManifestAuthorizationRecord> {

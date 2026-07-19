@@ -67,6 +67,13 @@ function connectionFingerprint(connectionUri: string): string {
   return sha256(parsed.toString());
 }
 
+function connectionDisplay(connectionUri: string): string {
+  const parsed = parseConnectionUri(connectionUri);
+  const database = decodeURIComponent(parsed.pathname.slice(1));
+  const user = parsed.username ? `${decodeURIComponent(parsed.username)}@` : "";
+  return `postgresql://${user}${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}/${database}`;
+}
+
 function withDatabase(connectionUri: string, database: string): string {
   const parsed = parseConnectionUri(connectionUri);
   parsed.pathname = `/${encodeURIComponent(database)}`;
@@ -402,6 +409,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
       schema: input.schema,
       backupScope: "database",
       connectionFingerprint: fingerprint,
+      connectionDisplay: connectionDisplay(input.connectionUri),
       stateWitness,
       statementDigest,
       artifactDigest,
@@ -419,6 +427,7 @@ THEN 'unsafe' ELSE 'safe' END;`;
       schema: input.schema,
       backupScope: "database",
       connectionFingerprint: fingerprint,
+      connectionDisplay: connectionDisplay(input.connectionUri),
       stateWitness,
       statementDigest,
       artifactDigest,
@@ -457,6 +466,11 @@ THEN 'unsafe' ELSE 'safe' END;`;
     if (witness(await this.dump(connectionUri)) !== operation.stateWitness) {
       throw new Error("Protected PostgreSQL state changed after the recovery proof was issued");
     }
+    const snapshot = await readFile(join(operation.artifactDir, "before.sql"));
+    if (sha256(snapshot) !== operation.artifactDigest || witness(snapshot) !== operation.stateWitness) {
+      throw new Error("PostgreSQL recovery artifact changed after the proof was issued");
+    }
+    await this.store.beginCommit(operation.id);
     await this.execute(connectionUri, sql, operation.schema);
     const postCommitWitness = witness(await this.dump(connectionUri));
     const committed: PostgresRecoveryOperation = {
@@ -474,13 +488,20 @@ THEN 'unsafe' ELSE 'safe' END;`;
 
   async recover(operationId: string, connectionUri: string): Promise<PostgresRecoveryOperation> {
     const operation = await this.get(operationId);
-    if (operation.status !== "committed" || !operation.postCommitWitness) {
+    if (!["committing", "committed"].includes(operation.status)) {
       throw new Error(`Operation is not recoverable from status: ${operation.status}`);
     }
     if (connectionFingerprint(connectionUri) !== operation.connectionFingerprint) {
       throw new Error("PostgreSQL connection does not match the restore-tested database");
     }
-    if (witness(await this.dump(connectionUri)) !== operation.postCommitWitness) {
+    const currentWitness = witness(await this.dump(connectionUri));
+    if (currentWitness === operation.stateWitness && operation.status === "committing") {
+      const recovered: PostgresRecoveryOperation = { ...operation, status: "recovered", recoveredAt: new Date().toISOString() };
+      await this.store.put(recovered);
+      return recovered;
+    }
+    const expectedPostWitness = operation.postCommitWitness ?? operation.drillPostWitness;
+    if (currentWitness !== expectedPostWitness) {
       throw new Error("PostgreSQL recovery would overwrite state changed after the authorized mutation");
     }
     const snapshot = await readFile(join(operation.artifactDir, "before.sql"));

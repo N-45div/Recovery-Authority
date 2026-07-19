@@ -101,7 +101,7 @@ export class ManifestCoordinator {
     const committed = new Set(manifest.committedOperationIds);
     for (const binding of manifest.bindings) {
       const operation = await this.operations.get(binding.operationId);
-      if (operation.status === "committed") committed.add(operation.id);
+      if (["committing", "committed"].includes(operation.status)) committed.add(operation.id);
     }
     let progress: RecoveryManifest = {
       ...manifest,
@@ -151,11 +151,10 @@ export class ManifestCoordinator {
       if (child.source !== "manifest" || child.manifestId !== manifest.id || !child.capability) {
         throw new Error(`Child capability is not derived from this manifest: ${binding.operationId}`);
       }
-      await this.childAuthorizations.assertAuthorized(binding.operationId, child.capability);
+      await this.childAuthorizations.assertManifestChildAuthorized(binding.operationId, manifest.id, child.capability);
     }
 
-    let progress: RecoveryManifest = { ...manifest, status: "committing", failure: null };
-    await this.manifests.put(progress);
+    let progress = await this.manifests.beginCommit(manifest.id);
     for (const binding of manifest.bindings) {
       const execution = executions.get(binding.operationId)!;
       const child = await this.childAuthorizations.get(binding.operationId);
@@ -168,7 +167,7 @@ export class ManifestCoordinator {
         await this.manifests.put(progress);
       } catch (error) {
         const operation = await this.operations.get(binding.operationId);
-        if (operation.status === "committed" && !progress.committedOperationIds.includes(operation.id)) {
+        if (["committing", "committed"].includes(operation.status) && !progress.committedOperationIds.includes(operation.id)) {
           progress = { ...progress, committedOperationIds: [...progress.committedOperationIds, operation.id] };
         }
         return this.compensate(progress, executions, "compensated", errorMessage(error));

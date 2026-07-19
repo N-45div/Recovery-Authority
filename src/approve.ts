@@ -1,11 +1,12 @@
 import { createInterface } from "node:readline/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createApprovalBroker } from "./approval.js";
 import { authorityKeyDir } from "./crypto.js";
 import { createManifestApprovalBroker } from "./manifest-approval.js";
 import { ManifestStore } from "./manifest-store.js";
 import { initializeAuthority } from "./signer.js";
 import { OperationStore } from "./store.js";
+import type { RecoveryOperation } from "./contracts.js";
 
 type ApprovalArguments =
   | { command: "init"; dataDir: string; keyDir: string }
@@ -33,6 +34,27 @@ function parseArguments(args: string[]): ApprovalArguments {
   return { command: "approve", operationId: args[1], dataDir, keyDir };
 }
 
+function approvalScope(operation: RecoveryOperation): string[] {
+  switch (operation.kind) {
+    case "filesystem.delete":
+      return operation.paths.map((path) => `Target:    ${join(operation.workspaceRoot, path)}`);
+    case "sqlite.mutate":
+      return [
+        `Database:  ${join(operation.workspaceRoot, operation.databasePath)}`,
+        `SQL hash:  ${operation.statementDigest}`,
+      ];
+    case "git.reset-hard":
+      return [`Repository:${operation.repositoryRoot}`, `Target:    ${operation.targetCommit}`];
+    case "postgres.schema-mutate":
+      return [
+        `Database:  ${operation.connectionDisplay}`,
+        `Schema:    ${operation.schema}`,
+        "Recovery:  full logical database; cross-schema cascades may be affected",
+        `SQL hash:  ${operation.statementDigest}`,
+      ];
+  }
+}
+
 export async function runApprovalCommand(args = process.argv.slice(2)): Promise<void> {
   const arguments_ = parseArguments(args);
   if (arguments_.command === "init") {
@@ -47,9 +69,11 @@ export async function runApprovalCommand(args = process.argv.slice(2)): Promise<
   if (arguments_.command === "approve-manifest") {
     const manifest = await new ManifestStore(dataDir).get(arguments_.manifestId);
     const proofPrefix = manifest.proofDigest.slice(0, 12);
-    const effects = manifest.bindings.map((binding, index) =>
-      `  ${index + 1}. ${binding.kind} (${binding.operationId})\n     ${binding.scope.join(", ")}`
-    );
+    const operations = new OperationStore(dataDir);
+    const effects = await Promise.all(manifest.bindings.map(async (binding, index) => {
+      const operation = await operations.get(binding.operationId);
+      return `  ${index + 1}. ${binding.kind} (${binding.operationId})\n     ${approvalScope(operation).join("\n     ")}`;
+    }));
     process.stderr.write([
       "\nRecovery Authority manifest approval\n",
       `Manifest:  ${manifest.id}\n`,
@@ -75,7 +99,7 @@ export async function runApprovalCommand(args = process.argv.slice(2)): Promise<
     "\nRecovery Authority approval\n",
     `Operation: ${operation.id}\n`,
     `Effect:    ${operation.kind}\n`,
-    `Scope:     ${operation.paths.join(", ")}\n`,
+    `${approvalScope(operation).join("\n")}\n`,
     `Reason:    ${operation.reason}\n`,
     `Expires:   ${operation.expiresAt}\n`,
     `Proof:     ${operation.proofDigest}\n\n`,
