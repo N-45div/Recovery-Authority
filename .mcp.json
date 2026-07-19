@@ -3,6 +3,12 @@
     "recovery-authority": {
       "command": "bun",
       "args": ["${PLUGIN_ROOT}/dist/cli.js", "mcp"],
+      "env_vars": [
+        "RECOVERY_AUTHORITY_MCP_SOCKET",
+        "RECOVERY_AUTHORITY_AUDIT_SOCKET",
+        "RECOVERY_AUTHORITY_SANDBOX",
+        "RECOVERY_AUTHORITY_KEY_DIR"
+      ],
       "env": {
         "RECOVERY_AUTHORITY_DATA_DIR": "${PLUGIN_DATA}"
       }
