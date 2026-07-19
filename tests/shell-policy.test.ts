@@ -41,6 +41,8 @@ describe("shell policy", () => {
     ["kubectl delete namespace production", "infrastructure.destructive"],
     ["python3 -c 'import shutil; shutil.rmtree(target)'", "filesystem.delete"],
     ["node -e 'require(\"fs\").rmSync(target, {recursive:true})'", "filesystem.delete"],
+    ["node --input-type=module -e 'import { StdioClientTransport } from \"@modelcontextprotocol/sdk/client/stdio.js\"'", "opaque.execution"],
+    ["bun ./dist/cli.js mcp", "opaque.execution"],
     ["codex exec --full-auto 'fix it'", "agent.delegate"],
     ["bash scripts/cleanup.sh", "opaque.execution"],
   ])("detects %s", (command, expectedCategory) => {

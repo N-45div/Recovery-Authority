@@ -9,6 +9,8 @@ Route destructive filesystem deletes, local SQLite mutations, schema-scoped Post
 
 The bundled `PreToolUse` hook independently blocks recognized destructive Bash and PowerShell commands. Do not retry a denied command through `sudo`, `env`, `sh -c`, PowerShell dynamic invocation, command substitution, a script wrapper, or another execution tool.
 
+Use only Recovery Authority tools already exposed in the agent's native tool list. Never construct an MCP client in a shell, import an MCP transport from an interpreter, or launch `dist/cli.js mcp` manually. If `recovery_orient` is unavailable as a native tool, stop and report that the plugin MCP tools are unavailable.
+
 ## Required workflow
 
 1. Identify the smallest affected scope and effect kind.

@@ -87,6 +87,15 @@ if (!pluginMatch) {
 }
 await assertMcpForwarding(root, "Repository MCP configuration");
 await assertMcpForwarding(pluginMatch[1]!.trim(), "Installed Recovery Authority plugin");
+const mcpRegistration = String(run("codex", ["mcp", "get", "recovery-authority"]).stdout);
+const missingRegistration = requiredForwardedEnvironment.filter((name) => !mcpRegistration.includes(name));
+if (!mcpRegistration.includes("transport: stdio") || missingRegistration.length > 0) {
+  throw new Error([
+    "Codex does not expose the expected native Recovery Authority MCP registration.",
+    `Missing forwarded environment entries: ${missingRegistration.join(", ") || "none"}`,
+    "Refresh and reinstall the plugin before starting a live demo.",
+  ].join("\n"));
+}
 
 if (checkOnly) {
   process.stdout.write([
@@ -95,6 +104,7 @@ if (checkOnly) {
     `Release TUI: ${tui}`,
     "Plugin: installed and enabled",
     "Host authority socket forwarding: verified",
+    "Native Codex MCP registration: verified",
     "tmux and bubblewrap: available",
     `tmux recording size: ${terminalWidth}x${terminalHeight}`,
     "",

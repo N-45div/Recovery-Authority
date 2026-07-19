@@ -155,7 +155,7 @@ export function evaluateHook(rawInput: unknown): HookDecision {
       blocked: false,
       command: null,
       findings: [],
-      output: lifecycleOutput("SessionStart", "Recovery Authority is active. Call recovery_orient before destructive or delegated work; raw destructive commands never inherit authority from a prepared proof."),
+      output: lifecycleOutput("SessionStart", "Recovery Authority is active. Use only its native MCP tools and call recovery_orient before destructive or delegated work. If the native tools are unavailable, stop; never construct an MCP client through a shell or interpreter. Raw destructive commands never inherit authority from a prepared proof."),
     };
   }
   if (input.hook_event_name === "SubagentStart") {

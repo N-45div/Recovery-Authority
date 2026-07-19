@@ -113,6 +113,22 @@ function interpreterDeletion(executable: string, args: string[]): RiskFinding[] 
   return [];
 }
 
+function shellMcpBootstrap(executable: string, args: string[]): RiskFinding[] {
+  if (!["node", "bun", "deno", "python", "python3", "python2"].includes(executable)) return [];
+  const source = args.join(" ");
+  if (
+    /(?:StdioClientTransport|@modelcontextprotocol\/sdk\/client)/.test(source) ||
+    (/(?:^|\/)(?:cli\.js|cli\.ts)\b/.test(source) && /\bmcp\b/.test(source))
+  ) {
+    return [finding(
+      "opaque.execution",
+      executable,
+      "shell-built MCP clients bypass native tool registration and the configured authority transport",
+    )];
+  }
+  return [];
+}
+
 export function classifyCommandWords(input: string[], assignments: string[] = []): RiskFinding[] {
   const rawExecutable = basename(input[0] ?? "").toLowerCase();
   const rawArgs = input.slice(1);
@@ -144,6 +160,9 @@ export function classifyCommandWords(input: string[], assignments: string[] = []
   ) {
     return [finding("authorization.approval", executable, "human approval must happen outside the coding agent session")];
   }
+
+  const mcpBootstrap = shellMcpBootstrap(executable, args);
+  if (mcpBootstrap.length > 0) return mcpBootstrap;
 
   if (["rm", "unlink", "shred", "rmdir"].includes(executable)) {
     return [finding("filesystem.delete", executable, `${executable} removes filesystem state`)];
