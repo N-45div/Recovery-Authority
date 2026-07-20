@@ -5,7 +5,11 @@ describe("Codex plugin MCP configuration", () => {
     const config = await Bun.file(new URL("../.mcp.json", import.meta.url)).json();
     const server = config.mcpServers["recovery-authority"];
 
-    expect(server.args).toEqual(["${PLUGIN_ROOT}/dist/mcp.js"]);
+    expect(server.command).toBe("bun");
+    expect(server.args[0]).toBe("--eval");
+    expect(server.args[1]).toContain("process.env.PLUGIN_ROOT");
+    expect(server.args[1]).toContain("process.env.CLAUDE_PLUGIN_ROOT");
+    expect(server.args.join(" ")).not.toContain("${PLUGIN_ROOT}");
     expect(server.env_vars).toEqual([
       "RECOVERY_AUTHORITY_MCP_SOCKET",
       "RECOVERY_AUTHORITY_AUDIT_SOCKET",

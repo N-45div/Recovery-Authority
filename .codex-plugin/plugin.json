@@ -1,6 +1,6 @@
 {
   "name": "recovery-authority",
-  "version": "0.12.0+codex.20260719203104",
+  "version": "0.12.0+codex.20260720174509",
   "description": "Give Codex consequence awareness, proven recovery, and reviewed multi-effect sagas.",
   "author": {
     "name": "Recovery Authority",
@@ -30,10 +30,7 @@
     "defaultPrompt": [
       "Safely delete these files with a recovery proof.",
       "Orient to the consequences of this cleanup command before running it.",
-      "Prepare one recovery manifest for these independent destructive effects.",
-      "Prove this PostgreSQL deletion can be recovered before running it.",
-      "Show operations that are waiting for my approval.",
-      "Show the recovery status for this operation."
+      "Prepare one recovery manifest for these independent destructive effects."
     ]
   },
   "mcpServers": "./.mcp.json"

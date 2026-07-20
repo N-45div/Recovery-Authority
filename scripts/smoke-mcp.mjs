@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = process.env.PLUGIN_UNDER_TEST ?? sourceRoot;
+const pluginMcpConfig = JSON.parse(await readFile(join(pluginRoot, ".mcp.json"), "utf8"));
+const pluginMcp = pluginMcpConfig.mcpServers["recovery-authority"];
 const workspace = await mkdtemp(join(tmpdir(), "recovery-mcp-workspace-"));
 const dataDir = await mkdtemp(join(tmpdir(), "recovery-mcp-data-"));
 const keyDir = `${dataDir}.keys`;
@@ -115,8 +117,8 @@ runBun(`
 `);
 
 const transport = new StdioClientTransport({
-  command: bun,
-  args: [join(pluginRoot, "dist", "mcp.js")],
+  command: pluginMcp.command === "bun" ? bun : pluginMcp.command,
+  args: pluginMcp.args,
   env: {
     PATH: process.env.PATH ?? "",
     PLUGIN_ROOT: pluginRoot,

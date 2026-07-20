@@ -57,7 +57,8 @@ function shellCommand(parts: string[]): string {
 async function assertMcpForwarding(pluginRoot: string, label: string): Promise<void> {
   const configPath = join(pluginRoot, ".mcp.json");
   const config = await Bun.file(configPath).json();
-  const forwarded = config?.mcpServers?.["recovery-authority"]?.env_vars;
+  const mcp = config?.mcpServers?.["recovery-authority"];
+  const forwarded = mcp?.env_vars;
   const missing = requiredForwardedEnvironment.filter(
     (name) => !Array.isArray(forwarded) || !forwarded.includes(name),
   );
@@ -65,6 +66,13 @@ async function assertMcpForwarding(pluginRoot: string, label: string): Promise<v
     throw new Error([
       `${label} does not forward the host authority boundary into its MCP worker.`,
       `Missing from ${configPath}: ${missing.join(", ")}`,
+      "Refresh the marketplace and reinstall Recovery Authority before starting a live demo.",
+    ].join("\n"));
+  }
+  if (JSON.stringify(mcp?.args ?? []).includes("${PLUGIN_ROOT}")) {
+    throw new Error([
+      `${label} relies on unsupported PLUGIN_ROOT argument interpolation.`,
+      `Codex passes the placeholder literally and the MCP worker cannot start: ${configPath}`,
       "Refresh the marketplace and reinstall Recovery Authority before starting a live demo.",
     ].join("\n"));
   }

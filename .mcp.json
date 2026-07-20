@@ -2,7 +2,10 @@
   "mcpServers": {
     "recovery-authority": {
       "command": "bun",
-      "args": ["${PLUGIN_ROOT}/dist/mcp.js"],
+      "args": [
+        "--eval",
+        "import { join } from 'node:path'; import { pathToFileURL } from 'node:url'; const root = process.env.PLUGIN_ROOT ?? process.env.CLAUDE_PLUGIN_ROOT; if (!root) throw new Error('Recovery Authority plugin root is unavailable'); await import(pathToFileURL(join(root, 'dist', 'mcp.js')).href);"
+      ],
       "env_vars": [
         "RECOVERY_AUTHORITY_MCP_SOCKET",
         "RECOVERY_AUTHORITY_AUDIT_SOCKET",
