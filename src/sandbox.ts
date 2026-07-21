@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorityKeyDir } from "./crypto.js";
@@ -186,7 +186,11 @@ async function main(): Promise<void> {
   }
 
   await initializeAuthority(parsed.dataDir, parsed.keyDir);
-  const runtimeDir = await mkdtemp(join(tmpdir(), "recovery-authority-sandbox-"));
+  const runtimeParent = process.env.RECOVERY_AUTHORITY_RUNTIME_ROOT
+    ? resolve(process.env.RECOVERY_AUTHORITY_RUNTIME_ROOT)
+    : dirname(parsed.dataDir);
+  await mkdir(runtimeParent, { recursive: true, mode: 0o700 });
+  const runtimeDir = await mkdtemp(join(runtimeParent, ".recovery-authority-sandbox-"));
   if (parsed.stageCodexHome) parsed.codexHome = await stageCodexHome(runtimeDir);
   const socketPath = join(runtimeDir, "authority.sock");
   const auditSocketPath = join(runtimeDir, "audit.sock");
