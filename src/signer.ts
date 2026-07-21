@@ -22,6 +22,10 @@ export class CapabilitySigner {
     const keyPublicPath = join(resolvedKeyDir, "authority-public.pem");
     const verifierPublicPath = join(resolvedDataDir, "authority-public.pem");
     const legacyPrivatePath = join(resolvedDataDir, "authority-private.pem");
+    const establishedPublic = await readFile(verifierPublicPath, "utf8").catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    });
 
     if (resolvedKeyDir !== resolvedDataDir) {
       const legacyPrivate = await readFile(legacyPrivatePath, "utf8").catch((error) => {
@@ -70,7 +74,18 @@ export class CapabilitySigner {
         ]);
       });
     }
-    await writeFile(verifierPublicPath, publicKey, { mode: 0o644 });
+    if (establishedPublic && establishedPublic !== publicKey) {
+      throw new Error("Signing key does not match the authority identity established for this ledger");
+    }
+    if (!establishedPublic && resolvedKeyDir !== resolvedDataDir) {
+      await writeFile(verifierPublicPath, publicKey, { mode: 0o644, flag: "wx" }).catch(async (error) => {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const concurrentPublic = await readFile(verifierPublicPath, "utf8");
+        if (concurrentPublic !== publicKey) {
+          throw new Error("Signing key does not match the authority identity established for this ledger");
+        }
+      });
+    }
     return new CapabilitySigner(privateKey);
   }
 
@@ -84,4 +99,3 @@ export class CapabilitySigner {
 export async function initializeAuthority(dataDir: string, keyDir = authorityKeyDir(dataDir)): Promise<void> {
   await CapabilitySigner.loadOrCreate(keyDir, dataDir);
 }
-

@@ -19,6 +19,7 @@ await writeFile(join(workspace, "state.txt"), "recover me");
 const databasePath = join(workspace, "app.sqlite");
 const localBun = join(sourceRoot, ".tools", "bun", "bin", "bun");
 const bun = existsSync(localBun) ? localBun : "bun";
+const conciseApproval = process.env.RECOVERY_AUTHORITY_APPROVAL_ENV_READY === "1";
 
 function runBun(source) {
   const result = spawnSync(bun, ["-e", source], {
@@ -43,24 +44,21 @@ async function approve(preparedOutput) {
   assert.equal(preparedOutput.authorization.status, "pending");
   assert.equal(preparedOutput.authorization.capability, null);
   assert.match(preparedOutput.authorization.approvalCommand, /dist\/authority\.js/);
+  if (conciseApproval) assert.doesNotMatch(preparedOutput.authorization.approvalCommand, /--data-dir/);
   assert.equal("capability" in preparedOutput, false);
+  const approvalArgs = [join(pluginRoot, "dist", "authority.js"), "approve", preparedOutput.operation.id];
+  if (!conciseApproval) approvalArgs.push("--data-dir", dataDir, "--key-dir", keyDir);
   const result = spawnSync(
     bun,
-    [
-      join(pluginRoot, "dist", "authority.js"),
-      "approve",
-      preparedOutput.operation.id,
-      "--data-dir",
-      dataDir,
-      "--key-dir",
-      keyDir,
-    ],
+    approvalArgs,
     {
       encoding: "utf8",
       input: `${preparedOutput.operation.proofDigest.slice(0, 12)}\n`,
       env: {
         ...process.env,
         PLUGIN_ROOT: pluginRoot,
+        RECOVERY_AUTHORITY_DATA_DIR: dataDir,
+        RECOVERY_AUTHORITY_KEY_DIR: keyDir,
         RECOVERY_AUTHORITY_ALLOW_NONINTERACTIVE_APPROVAL: "1",
       },
     },
@@ -78,23 +76,20 @@ async function approve(preparedOutput) {
 async function approveManifest(preparedOutput) {
   assert.equal(preparedOutput.authorization.status, "pending");
   assert.match(preparedOutput.authorization.approvalCommand, /approve-manifest/);
+  if (conciseApproval) assert.doesNotMatch(preparedOutput.authorization.approvalCommand, /--data-dir/);
+  const approvalArgs = [join(pluginRoot, "dist", "authority.js"), "approve-manifest", preparedOutput.manifest.id];
+  if (!conciseApproval) approvalArgs.push("--data-dir", dataDir, "--key-dir", keyDir);
   const result = spawnSync(
     bun,
-    [
-      join(pluginRoot, "dist", "authority.js"),
-      "approve-manifest",
-      preparedOutput.manifest.id,
-      "--data-dir",
-      dataDir,
-      "--key-dir",
-      keyDir,
-    ],
+    approvalArgs,
     {
       encoding: "utf8",
       input: `${preparedOutput.manifest.proofDigest.slice(0, 12)}\n`,
       env: {
         ...process.env,
         PLUGIN_ROOT: pluginRoot,
+        RECOVERY_AUTHORITY_DATA_DIR: dataDir,
+        RECOVERY_AUTHORITY_KEY_DIR: keyDir,
         RECOVERY_AUTHORITY_ALLOW_NONINTERACTIVE_APPROVAL: "1",
       },
     },
@@ -124,6 +119,7 @@ const transport = new StdioClientTransport({
     PATH: process.env.PATH ?? "",
     RECOVERY_AUTHORITY_DATA_DIR: dataDir,
     RECOVERY_AUTHORITY_KEY_DIR: keyDir,
+    ...(conciseApproval ? { RECOVERY_AUTHORITY_APPROVAL_ENV_READY: "1" } : {}),
   },
   stderr: "pipe",
 });

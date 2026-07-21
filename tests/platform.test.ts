@@ -37,6 +37,10 @@ describe("platform adapters", () => {
 
     const manifest = formatManifestApprovalCommand("/opt/plugin/dist/authority.js", "manifest-1", "/tmp/data", "/tmp/keys", "linux");
     expect(manifest).toContain("bun '/opt/plugin/dist/authority.js' 'approve-manifest' 'manifest-1'");
+
+    const concise = formatApprovalCommand("dist/authority.js", "op-1", "/tmp/data", "/tmp/keys", "linux", false);
+    expect(concise).toBe("bun 'dist/authority.js' 'approve' 'op-1'");
+    expect(concise).not.toContain("--data-dir");
   });
 
   test("uses named pipes on Windows and Unix sockets elsewhere", () => {

@@ -164,6 +164,7 @@ await mkdir(dirname(demoFixture), { recursive: true });
 await writeFile(demoFixture, "Ada\nGrace\n", { mode: 0o600 });
 
 const codexCommand = shellCommand([
+  "env", "RECOVERY_AUTHORITY_APPROVAL_ENV_READY=1",
   "bun", "run", "sandbox",
   "--workspace", root,
   "--data-dir", dataDir,

@@ -57,4 +57,21 @@ describe("capability key separation", () => {
     expect((await PublicCapabilityVerifier.load(legacyDir)).verify(capability).proofDigest).toBe("legacy-proof");
     expect(await readFile(join(legacyDir, "unrelated"), "utf8")).toBe("preserved");
   });
+
+  test("refuses to replace an established ledger identity with another signing key", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "recovery-established-data-"));
+    const keyDir = await mkdtemp(join(tmpdir(), "recovery-established-keys-"));
+    const otherDataDir = await mkdtemp(join(tmpdir(), "recovery-other-data-"));
+    const otherKeyDir = await mkdtemp(join(tmpdir(), "recovery-other-keys-"));
+    roots.push(dataDir, keyDir, otherDataDir, otherKeyDir);
+
+    await CapabilitySigner.loadOrCreate(keyDir, dataDir);
+    await CapabilitySigner.loadOrCreate(otherKeyDir, otherDataDir);
+    const establishedPublic = await readFile(join(dataDir, "authority-public.pem"), "utf8");
+
+    await expect(CapabilitySigner.loadOrCreate(otherKeyDir, dataDir)).rejects.toThrow(
+      "Signing key does not match the authority identity established for this ledger",
+    );
+    expect(await readFile(join(dataDir, "authority-public.pem"), "utf8")).toBe(establishedPublic);
+  });
 });

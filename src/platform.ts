@@ -80,8 +80,14 @@ export function formatApprovalCommand(
   dataDir: string,
   keyDir: string,
   platform: NodeJS.Platform = process.platform,
+  explicitPaths = true,
 ): string {
-  const values = [cliEntry, "approve", operationId, "--data-dir", dataDir, "--key-dir", keyDir];
+  const values = [
+    cliEntry,
+    "approve",
+    operationId,
+    ...(explicitPaths ? ["--data-dir", dataDir, "--key-dir", keyDir] : []),
+  ];
   if (platform === "win32") return `& bun ${values.map(quotePowerShell).join(" ")}`;
   return `bun ${values.map(quotePosix).join(" ")}`;
 }
@@ -92,8 +98,14 @@ export function formatManifestApprovalCommand(
   dataDir: string,
   keyDir: string,
   platform: NodeJS.Platform = process.platform,
+  explicitPaths = true,
 ): string {
-  const values = [cliEntry, "approve-manifest", manifestId, "--data-dir", dataDir, "--key-dir", keyDir];
+  const values = [
+    cliEntry,
+    "approve-manifest",
+    manifestId,
+    ...(explicitPaths ? ["--data-dir", dataDir, "--key-dir", keyDir] : []),
+  ];
   if (platform === "win32") return `& bun ${values.map(quotePowerShell).join(" ")}`;
   return `bun ${values.map(quotePosix).join(" ")}`;
 }

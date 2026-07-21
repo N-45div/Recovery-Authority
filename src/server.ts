@@ -50,6 +50,8 @@ const pluginRoot = process.env.PLUGIN_ROOT
   ? resolve(process.env.PLUGIN_ROOT)
   : resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const authorityEntry = resolve(pluginRoot, "dist", "authority.js");
+const approvalEnvironmentReady = process.env.RECOVERY_AUTHORITY_APPROVAL_ENV_READY === "1";
+const approvalEntry = approvalEnvironmentReady ? "dist/authority.js" : authorityEntry;
 const store = new OperationStore(dataDir);
 const verifier = await PublicCapabilityVerifier.load(dataDir);
 const approvals = new AuthorizationRegistry(dataDir, store, verifier);
@@ -80,7 +82,14 @@ function authorizationView<T extends { operationId: string; status: string }>(au
   return {
     ...authorization,
     approvalCommand: authorization.status === "pending"
-      ? formatApprovalCommand(authorityEntry, authorization.operationId, dataDir, keyDir)
+      ? formatApprovalCommand(
+        approvalEntry,
+        authorization.operationId,
+        dataDir,
+        keyDir,
+        process.platform,
+        !approvalEnvironmentReady,
+      )
       : null,
   };
 }
@@ -89,7 +98,14 @@ function manifestAuthorizationView<T extends { manifestId: string; status: strin
   return {
     ...authorization,
     approvalCommand: authorization.status === "pending"
-      ? formatManifestApprovalCommand(authorityEntry, authorization.manifestId, dataDir, keyDir)
+      ? formatManifestApprovalCommand(
+        approvalEntry,
+        authorization.manifestId,
+        dataDir,
+        keyDir,
+        process.platform,
+        !approvalEnvironmentReady,
+      )
       : null,
   };
 }
