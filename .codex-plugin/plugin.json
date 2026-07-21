@@ -1,6 +1,6 @@
 {
   "name": "recovery-authority",
-  "version": "0.12.0+codex.20260721032911",
+  "version": "0.12.0+codex.20260721033451",
   "description": "Give Codex consequence awareness, proven recovery, and reviewed multi-effect sagas.",
   "author": {
     "name": "Recovery Authority",

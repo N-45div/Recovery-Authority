@@ -1,11 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const root = resolve(process.env.PLUGIN_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const timestamp = new Date().toISOString().replaceAll(/[^0-9TZ]/g, "");
@@ -32,11 +30,16 @@ const requiredForwardedEnvironment = [
   "RECOVERY_AUTHORITY_DATA_DIR",
 ] as const;
 
-function run(command: string, args: string[], options: { inherit?: boolean; allowFailure?: boolean } = {}) {
+function run(
+  command: string,
+  args: string[],
+  options: { inherit?: boolean; allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+) {
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: options.inherit ? undefined : "utf8",
     stdio: options.inherit ? "inherit" : "pipe",
+    env: options.env ?? process.env,
   });
   if (result.error) throw result.error;
   if (result.status !== 0 && !options.allowFailure) {
@@ -89,56 +92,10 @@ async function assertMcpForwarding(pluginRoot: string, label: string): Promise<v
   }
 }
 
-function inheritedEnvironment(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
-}
-
-async function assertMcpHandshake(pluginRoot: string): Promise<void> {
-  const probeRoot = await mkdtemp(join(tmpdir(), "recovery-authority-mcp-probe-"));
-  const probeData = join(probeRoot, "data");
-  const probeKeys = join(probeRoot, "keys");
-  await Promise.all([
-    mkdir(probeData, { recursive: true, mode: 0o700 }),
-    mkdir(probeKeys, { recursive: true, mode: 0o700 }),
-  ]);
-  const config = await Bun.file(join(pluginRoot, ".mcp.json")).json();
-  const mcp = config.mcpServers["recovery-authority"];
-  const transport = new StdioClientTransport({
-    command: mcp.command,
-    args: mcp.args,
-    cwd: resolve(pluginRoot, mcp.cwd ?? "."),
-    env: {
-      ...inheritedEnvironment(),
-      RECOVERY_AUTHORITY_DATA_DIR: probeData,
-      RECOVERY_AUTHORITY_KEY_DIR: probeKeys,
-    },
-    stderr: "pipe",
+function assertMcpHandshake(pluginRoot: string): void {
+  run("node", [join(root, "scripts", "smoke-mcp.mjs")], {
+    env: { ...process.env, PLUGIN_UNDER_TEST: pluginRoot },
   });
-  let stderr = "";
-  transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-  const client = new Client({ name: "recovery-authority-demo-preflight", version: "0.1.0" });
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      client.connect(transport),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("MCP handshake timed out after 10 seconds")), 10_000);
-      }),
-    ]);
-    const tools = await client.listTools();
-    if (!tools.tools.some((tool) => tool.name === "recovery_orient")) {
-      throw new Error("MCP server started without the recovery_orient tool");
-    }
-  } catch (error) {
-    const detail = stderr.trim();
-    throw new Error(`Installed Recovery Authority MCP handshake failed: ${String(error)}${detail ? `\n${detail}` : ""}`);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    await client.close().catch(() => undefined);
-    await rm(probeRoot, { recursive: true, force: true });
-  }
 }
 
 for (const command of ["bun", "cargo", "codex", "tmux", "bwrap"]) requireCommand(command);
@@ -184,7 +141,7 @@ if (!mcpRegistration.includes("transport: stdio") || missingRegistration.length 
     "Refresh and reinstall the plugin before starting a live demo.",
   ].join("\n"));
 }
-await assertMcpHandshake(installedPluginRoot);
+assertMcpHandshake(installedPluginRoot);
 
 if (checkOnly) {
   process.stdout.write([
