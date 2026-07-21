@@ -119,9 +119,9 @@ runBun(`
 const transport = new StdioClientTransport({
   command: pluginMcp.command === "bun" ? bun : pluginMcp.command,
   args: pluginMcp.args,
+  cwd: resolve(pluginRoot, pluginMcp.cwd ?? "."),
   env: {
     PATH: process.env.PATH ?? "",
-    PLUGIN_ROOT: pluginRoot,
     RECOVERY_AUTHORITY_DATA_DIR: dataDir,
     RECOVERY_AUTHORITY_KEY_DIR: keyDir,
   },

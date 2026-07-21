@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const root = resolve(process.env.PLUGIN_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const timestamp = new Date().toISOString().replaceAll(/[^0-9TZ]/g, "");
@@ -17,6 +19,7 @@ const sessionRoot = resolve(
 );
 const dataDir = join(sessionRoot, "data");
 const keyDir = join(sessionRoot, "keys");
+const demoFixture = join(root, ".internal", "live-demo", "customer-data.txt");
 const tui = join(root, "target", "release", "recovery-authority");
 const checkOnly = process.argv.includes("--check");
 const terminalWidth = String(Math.max(process.stdout.columns ?? 160, 120));
@@ -26,6 +29,7 @@ const requiredForwardedEnvironment = [
   "RECOVERY_AUTHORITY_AUDIT_SOCKET",
   "RECOVERY_AUTHORITY_SANDBOX",
   "RECOVERY_AUTHORITY_KEY_DIR",
+  "RECOVERY_AUTHORITY_DATA_DIR",
 ] as const;
 
 function run(command: string, args: string[], options: { inherit?: boolean; allowFailure?: boolean } = {}) {
@@ -76,6 +80,65 @@ async function assertMcpForwarding(pluginRoot: string, label: string): Promise<v
       "Refresh the marketplace and reinstall Recovery Authority before starting a live demo.",
     ].join("\n"));
   }
+  if (mcp?.cwd !== "." || mcp?.args?.[0] !== "./dist/mcp.js") {
+    throw new Error([
+      `${label} does not use the portable plugin-relative MCP launcher.`,
+      `Expected cwd '.' and entry './dist/mcp.js' in ${configPath}`,
+      "Refresh the marketplace and reinstall Recovery Authority before starting a live demo.",
+    ].join("\n"));
+  }
+}
+
+function inheritedEnvironment(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+async function assertMcpHandshake(pluginRoot: string): Promise<void> {
+  const probeRoot = await mkdtemp(join(tmpdir(), "recovery-authority-mcp-probe-"));
+  const probeData = join(probeRoot, "data");
+  const probeKeys = join(probeRoot, "keys");
+  await Promise.all([
+    mkdir(probeData, { recursive: true, mode: 0o700 }),
+    mkdir(probeKeys, { recursive: true, mode: 0o700 }),
+  ]);
+  const config = await Bun.file(join(pluginRoot, ".mcp.json")).json();
+  const mcp = config.mcpServers["recovery-authority"];
+  const transport = new StdioClientTransport({
+    command: mcp.command,
+    args: mcp.args,
+    cwd: resolve(pluginRoot, mcp.cwd ?? "."),
+    env: {
+      ...inheritedEnvironment(),
+      RECOVERY_AUTHORITY_DATA_DIR: probeData,
+      RECOVERY_AUTHORITY_KEY_DIR: probeKeys,
+    },
+    stderr: "pipe",
+  });
+  let stderr = "";
+  transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+  const client = new Client({ name: "recovery-authority-demo-preflight", version: "0.1.0" });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.connect(transport),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("MCP handshake timed out after 10 seconds")), 10_000);
+      }),
+    ]);
+    const tools = await client.listTools();
+    if (!tools.tools.some((tool) => tool.name === "recovery_orient")) {
+      throw new Error("MCP server started without the recovery_orient tool");
+    }
+  } catch (error) {
+    const detail = stderr.trim();
+    throw new Error(`Installed Recovery Authority MCP handshake failed: ${String(error)}${detail ? `\n${detail}` : ""}`);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    await client.close().catch(() => undefined);
+    await rm(probeRoot, { recursive: true, force: true });
+  }
 }
 
 for (const command of ["bun", "cargo", "codex", "tmux", "bwrap"]) requireCommand(command);
@@ -83,7 +146,7 @@ if (!existsSync(tui)) throw new Error("Release TUI is missing. Run: cargo build 
 
 const pluginList = run("codex", ["plugin", "list"]);
 const pluginMatch = String(pluginList.stdout).match(
-  /^recovery-authority@recovery-authority\s+installed, enabled\s+\S+\s+(.+)$/m,
+  /^recovery-authority@recovery-authority\s+installed, enabled\s+(\S+)\s+(.+)$/m,
 );
 if (!pluginMatch) {
   throw new Error([
@@ -94,7 +157,24 @@ if (!pluginMatch) {
   ].join("\n"));
 }
 await assertMcpForwarding(root, "Repository MCP configuration");
-await assertMcpForwarding(pluginMatch[1]!.trim(), "Installed Recovery Authority plugin");
+const codexHome = resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex"));
+const installedPluginRoot = join(
+  codexHome,
+  "plugins",
+  "cache",
+  "recovery-authority",
+  "recovery-authority",
+  pluginMatch[1]!,
+);
+if (!existsSync(installedPluginRoot)) {
+  throw new Error([
+    "Codex reports Recovery Authority as installed, but its installed cache is missing.",
+    `Expected: ${installedPluginRoot}`,
+    `Marketplace source: ${pluginMatch[2]!.trim()}`,
+    "Refresh the marketplace and reinstall Recovery Authority.",
+  ].join("\n"));
+}
+await assertMcpForwarding(installedPluginRoot, "Installed Recovery Authority plugin");
 const mcpRegistration = String(run("codex", ["mcp", "get", "recovery-authority"]).stdout);
 const missingRegistration = requiredForwardedEnvironment.filter((name) => !mcpRegistration.includes(name));
 if (!mcpRegistration.includes("transport: stdio") || missingRegistration.length > 0) {
@@ -104,6 +184,7 @@ if (!mcpRegistration.includes("transport: stdio") || missingRegistration.length 
     "Refresh and reinstall the plugin before starting a live demo.",
   ].join("\n"));
 }
+await assertMcpHandshake(installedPluginRoot);
 
 if (checkOnly) {
   process.stdout.write([
@@ -112,7 +193,7 @@ if (checkOnly) {
     `Release TUI: ${tui}`,
     "Plugin: installed and enabled",
     "Host authority socket forwarding: verified",
-    "Native Codex MCP registration: verified",
+    "Native Codex MCP handshake: verified",
     "tmux and bubblewrap: available",
     `tmux recording size: ${terminalWidth}x${terminalHeight}`,
     "",
@@ -122,6 +203,8 @@ if (checkOnly) {
 
 await mkdir(dataDir, { recursive: true, mode: 0o700 });
 await mkdir(keyDir, { recursive: true, mode: 0o700 });
+await mkdir(dirname(demoFixture), { recursive: true });
+await writeFile(demoFixture, "Ada\nGrace\n", { mode: 0o600 });
 
 const codexCommand = shellCommand([
   "bun", "run", "sandbox",
@@ -167,6 +250,7 @@ try {
 process.stdout.write([
   `Recovery Authority live session: ${session}`,
   `Evidence ledger: ${dataDir}`,
+  `Fresh demo fixture: ${demoFixture}`,
   "",
   "agent: sandboxed Codex plus separate human approval terminal",
   "mission: live Rust TUI over the same host-owned ledger",

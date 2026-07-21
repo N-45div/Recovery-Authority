@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { cp, lstat, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,13 +118,24 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+export function removeTomlTableFamily(config: string, table: string): string {
+  let excluded = false;
+  const kept = config.split("\n").filter((line) => {
+    const header = line.match(/^\s*\[([^\]]+)]\s*(?:#.*)?$/);
+    if (header) {
+      excluded = header[1] === table || header[1]?.startsWith(`${table}.`) === true;
+    }
+    return !excluded;
+  });
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
 async function stageCodexHome(runtimeDir: string): Promise<string> {
   const source = await realpath(resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex")));
   const destination = join(runtimeDir, "codex-home");
   await mkdir(destination, { recursive: true, mode: 0o700 });
   const copiedFiles = [
     "auth.json",
-    "config.toml",
     "installation_id",
     "models_cache.json",
     "state_5.sqlite",
@@ -135,6 +146,15 @@ async function stageCodexHome(runtimeDir: string): Promise<string> {
   for (const name of copiedFiles) {
     const sourcePath = join(source, name);
     if (await pathExists(sourcePath)) await cp(sourcePath, join(destination, name), { preserveTimestamps: true });
+  }
+  const sourceConfig = join(source, "config.toml");
+  if (await pathExists(sourceConfig)) {
+    const config = await readFile(sourceConfig, "utf8");
+    await writeFile(
+      join(destination, "config.toml"),
+      removeTomlTableFamily(config, "mcp_servers"),
+      { mode: 0o600 },
+    );
   }
   for (const name of ["cache", "memories", "packages", "plugins", "rules", "skills"]) {
     const sourcePath = join(source, name);
