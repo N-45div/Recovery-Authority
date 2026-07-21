@@ -331,7 +331,7 @@ The hook detects direct and interpreter-mediated filesystem deletion, truncating
 
 ## OpenAI Build Week
 
-This project was built with Codex during the official submission period. Codex was used to research the agent-safety problem, challenge the initial CLI-only design, implement the Bun MCP server and Rust TUI, build Bash and PowerShell AST hooks, design the proof-bound capability contracts, create platform adapters, write the PostgreSQL adapter, run destructive recovery drills, diagnose runtime failures, package the plugin, and execute the test matrix.
+This project was built with Codex during the official submission period. GPT-5.6 was the primary model in the core Codex build session, where it helped research the agent-safety problem, challenge the initial CLI-only design, implement the Bun MCP server and Rust TUI, build Bash and PowerShell AST hooks, design the proof-bound capability contracts, create platform adapters, write the PostgreSQL adapter, run destructive recovery drills, diagnose runtime failures, package the plugin, and execute the test matrix.
 
 The human made the key product decisions: recovery must be demonstrated rather than promised; agents must consume the same MCP and skill contract; PostgreSQL cascades require a full-database artifact; multi-effect work needs an aggregate proof and compensated saga rather than repeated blind approvals; approval must occur outside the coding-agent session; and unsupported effects must remain blocked rather than receive a fake safety guarantee. The submission's Codex `/feedback` session ID and dated commit history provide the authoritative GPT-5.6/Codex build trace.
 
